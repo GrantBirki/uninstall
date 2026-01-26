@@ -1,0 +1,369 @@
+#! /bin/bash
+
+# COLORS
+export OFF='\033[0m'
+export RED='\033[0;31m'
+export GREEN='\033[0;32m'
+export BLUE='\033[0;34m'
+export PURPLE='\033[0;35m'
+
+print_info() { printf "%s\n" "$1"; }
+print_warn() { printf "%b%s%b\n" "$PURPLE" "$1" "$OFF"; }
+print_error() { printf "%b%s%b\n" "$RED" "$1" "$OFF"; }
+print_success() { printf "%b%s%b\n" "$GREEN" "$1" "$OFF"; }
+print_prompt() { printf "%b%s%b" "$PURPLE" "$1" "$OFF"; }
+print_header() { printf "%b%s%b\n" "$BLUE" "$1" "$OFF"; }
+
+print_usage() {
+  print_info "Usage: uninstall [--dry-run] [--yes] /path/to/app.app"
+  print_info "  --dry-run   Show matches and summary without removing anything (default)."
+  print_info "  --yes       Skip confirmation prompts and proceed."
+}
+
+function main() {
+  IFS=$'\n'
+
+  dry_run=true
+  auto_yes=false
+  prompt_for_confirmation=true
+  seen_dry_run=false
+  seen_yes=false
+  app_path=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --help|-h)
+        print_usage
+        exit 0
+        ;;
+      --yes|-y)
+        seen_yes=true
+        auto_yes=true
+        dry_run=false
+        prompt_for_confirmation=false
+        ;;
+      --dry-run)
+        seen_dry_run=true
+        dry_run=true
+        prompt_for_confirmation=false
+        ;;
+      --)
+        shift
+        break
+        ;;
+      -*)
+        print_error "Unknown option: $1"
+        print_usage
+        exit 1
+        ;;
+      *)
+        if [ -z "$app_path" ]; then
+          app_path="$1"
+        else
+          print_error "Unexpected argument: $1"
+          print_usage
+          exit 1
+        fi
+        ;;
+    esac
+    shift
+  done
+
+  if [ -z "$app_path" ] && [ $# -gt 0 ]; then
+    app_path="$1"
+    shift
+  fi
+
+  if [ $# -gt 0 ]; then
+    print_error "Unexpected arguments: $*"
+    print_usage
+    exit 1
+  fi
+
+  if [ "$seen_yes" = true ] && [ "$seen_dry_run" = true ]; then
+    print_error "Cannot combine --yes with --dry-run."
+    exit 1
+  fi
+
+  if [ -z "$app_path" ]; then
+    print_error "Missing app path."
+    print_usage
+    exit 1
+  fi
+
+  app_name=$(basename "$app_path" .app)
+  success=true
+  processes_found=0
+  processes_killed=0
+  receipt_logs_saved=0
+  receipt_logs_matched=0
+  paths_matched=0
+  trash_action="skipped"
+  trash_count=0
+  kill_action="skipped"
+  receipt_logs_action="skipped"
+  confirmation_result="pending"
+
+  if [ ! -e "$app_path/Contents/Info.plist" ]; then
+    print_error "Cannot find app plist."
+    exit 1
+  fi
+
+  bundle_identifier=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$app_path/Contents/Info.plist" 2> /dev/null)
+
+  if [ "$bundle_identifier" = "" ]; then
+    print_error "Cannot find app bundle identifier."
+    exit 1
+  fi
+
+  print_info "Checking for running processes…"
+  sleep 1
+
+  processes=($(pgrep -afil "$app_name" | grep -v "uninstall"))
+  processes_found=${#processes[@]}
+
+  receipt_paths=()
+
+  receipt_paths+=($(find /private/var/db/receipts -iname "*$app_name*.bom" -maxdepth 1 -prune 2>&1 | grep -v "Permission denied"))
+  receipt_paths+=($(find /private/var/db/receipts -iname "*$bundle_identifier*.bom" -maxdepth 1 -prune 2>&1 | grep -v "Permission denied"))
+
+  receipt_logs_matched=${#receipt_paths[@]}
+
+  print_info "Finding app data…"
+  sleep 1
+
+  locations=(
+    "$HOME/Library"
+    "$HOME/Library/Application Scripts"
+    "$HOME/Library/Application Support"
+    "$HOME/Library/Application Support/CrashReporter"
+    "$HOME/Library/Containers"
+    "$HOME/Library/Caches"
+    "$HOME/Library/HTTPStorages"
+    "$HOME/Library/Group Containers"
+    "$HOME/Library/Internet Plug-Ins"
+    "$HOME/Library/LaunchAgents"
+    "$HOME/Library/Logs"
+    "$HOME/Library/Preferences"
+    "$HOME/Library/Preferences/ByHost"
+    "$HOME/Library/Saved Application State"
+    "$HOME/Library/WebKit"
+    "/Library"
+    "/Library/Application Support"
+    "/Library/Application Support/CrashReporter"
+    "/Library/Caches"
+    "/Library/Extensions"
+    "/Library/Internet Plug-Ins"
+    "/Library/LaunchAgents"
+    "/Library/LaunchDaemons"
+    "/Library/Logs"
+    "/Library/Preferences"
+    "/Library/PrivilegedHelperTools"
+    "/private/var/db/receipts"
+    "/usr/local/bin"
+    "/usr/local/etc"
+    "/usr/local/opt"
+    "/usr/local/sbin"
+    "/usr/local/share"
+    "/usr/local/var"
+    $(getconf DARWIN_USER_CACHE_DIR | sed "s/\/$//")
+    $(getconf DARWIN_USER_TEMP_DIR | sed "s/\/$//")
+  )
+
+  paths=("$app_path")
+
+  for location in "${locations[@]}"; do
+    paths+=($(find "$location" -iname "*$app_name*" -maxdepth 1 -prune 2>&1 | grep -v "No such file or directory" | grep -v "Operation not permitted" | grep -v "Permission denied"))
+  done
+
+  for location in "${locations[@]}"; do
+    paths+=($(find "$location" -iname "*$bundle_identifier*" -maxdepth 1 -prune 2>&1 | grep -v "No such file or directory" | grep -v "Operation not permitted" | grep -v "Permission denied"))
+  done
+
+  paths=($(printf "%s\n" "${paths[@]}" | sort -u));
+  paths_matched=${#paths[@]}
+
+  print_header "Preflight summary"
+  print_info "App: $app_name"
+  print_info "Bundle ID: $bundle_identifier"
+  print_info "App path: $app_path"
+  if [ "$seen_dry_run" = true ]; then
+    print_info "Mode: dry run"
+  elif [ "$auto_yes" = true ]; then
+    print_info "Mode: auto-yes"
+  else
+    print_info "Mode: dry run until confirmed"
+  fi
+
+  print_header "Running processes"
+  if [ ${#processes[@]} -gt 0 ]; then
+    for process in "${processes[@]}"; do
+      printf "%b%s%b\n" "$PURPLE" "$process" "$OFF"
+    done
+  else
+    print_warn "None found."
+  fi
+
+  print_header "Receipts"
+  if [ ${#receipt_paths[@]} -gt 0 ]; then
+    print_info "Receipt BOMs matched: ${#receipt_paths[@]}"
+    for path in "${receipt_paths[@]}"; do
+      printf "%s\n" "$path"
+    done
+  else
+    print_warn "No receipt BOMs found."
+  fi
+
+  print_header "Matched paths"
+  if [ ${#paths[@]} -gt 0 ]; then
+    print_info "Total matched: ${#paths[@]}"
+    for path in "${paths[@]}"; do
+      printf "%s\n" "$path"
+    done
+  else
+    print_warn "No matching paths found."
+  fi
+
+  print_header "Planned actions"
+  if [ "$auto_yes" = true ]; then
+    print_warn "Proceeding without prompts (--yes)."
+  elif [ "$seen_dry_run" = true ]; then
+    print_warn "Dry run: no changes will be made."
+  else
+    print_info "Dry run default; you'll be asked to confirm before changes."
+  fi
+  if [ ${#paths[@]} -gt 0 ]; then
+    print_info "Move matched paths to Trash on confirmation."
+  else
+    print_warn "No matched paths to move."
+  fi
+  if [ ${#receipt_paths[@]} -gt 0 ]; then
+    print_info "Save receipt logs to Desktop on confirmation."
+  fi
+
+  proceed=false
+  if [ "$auto_yes" = true ]; then
+    proceed=true
+    confirmation_result="auto-yes"
+    dry_run=false
+  elif [ "$prompt_for_confirmation" = true ]; then
+    print_prompt "Proceed with uninstall (y or n)? "
+    read -r answer
+    if [ "$answer" = "y" ]; then
+      proceed=true
+      confirmation_result="confirmed"
+      dry_run=false
+    else
+      proceed=false
+      confirmation_result="declined"
+      dry_run=true
+    fi
+  else
+    proceed=false
+    confirmation_result="dry-run"
+  fi
+
+  if [ "$proceed" = false ]; then
+    if [ "$confirmation_result" = "declined" ]; then
+      print_warn "Uninstall cancelled by user."
+    else
+      print_warn "Dry run: no changes made."
+    fi
+  fi
+
+  if [ "$proceed" = true ]; then
+    if [ ${#processes[@]} -gt 0 ]; then
+      if [ "$auto_yes" = true ]; then
+        kill_answer="y"
+      else
+        print_prompt "Kill running processes (y or n)? "
+        read -r kill_answer
+      fi
+      if [ "$kill_answer" = "y" ]; then
+        kill_action="killed"
+        print_info "Killing running processes…"
+        sleep 1
+        for process in "${processes[@]}"; do
+          pid=$(printf "%s" "$process" | awk '{print $1}')
+          if [ -n "$pid" ]; then
+            sudo kill "$pid" 2>&1 | grep -v "No such process"
+            processes_killed=$((processes_killed + 1))
+          fi
+        done
+      else
+        kill_action="skipped by user"
+      fi
+    else
+      kill_action="none"
+    fi
+
+    if [ ${#receipt_paths[@]} -gt 0 ]; then
+      print_info "Saving bill of material logs to desktop…"
+      sleep 1
+      for path in "${receipt_paths[@]}"; do
+        mkdir -p "$HOME/Desktop/$app_name"
+        if lsbom -f -l -s -p f "$path" > "$HOME/Desktop/$app_name/$(basename "$path").log"; then
+          receipt_logs_saved=$((receipt_logs_saved + 1))
+        fi
+      done
+      receipt_logs_action="saved"
+    else
+      receipt_logs_action="none"
+    fi
+
+    if [ ${#paths[@]} -gt 0 ]; then
+      print_info "Moving app data to trash…"
+      sleep 1
+      posixFiles=$(printf ", POSIX file \"%s\"" "${paths[@]}" | awk '{print substr($0,3)}')
+      if osascript -e "tell application \"Finder\" to delete { $posixFiles }" > /dev/null; then
+        trash_action="moved"
+        trash_count=${#paths[@]}
+      else
+        trash_action="failed"
+        success=false
+        print_error "Move to Trash failed. Check Finder permissions."
+      fi
+    else
+      trash_action="skipped (no matches)"
+    fi
+  else
+    if [ "$confirmation_result" = "declined" ]; then
+      kill_action="skipped (not confirmed)"
+      receipt_logs_action="skipped (not confirmed)"
+      trash_action="skipped (not confirmed)"
+    else
+      kill_action="skipped (dry run)"
+      receipt_logs_action="skipped (dry run)"
+      trash_action="skipped (dry run)"
+    fi
+  fi
+
+  if [ "$processes_found" -eq 0 ]; then
+    kill_action="none"
+  fi
+  if [ "$receipt_logs_matched" -eq 0 ]; then
+    receipt_logs_action="none"
+  fi
+  if [ "$paths_matched" -eq 0 ]; then
+    trash_action="skipped (no matches)"
+    trash_count=0
+  fi
+
+  print_header "Summary report"
+  print_info "App: $app_name"
+  print_info "Bundle ID: $bundle_identifier"
+  print_info "Confirmation: $confirmation_result"
+  print_info "Processes found: $processes_found"
+  print_info "Processes killed: $processes_killed ($kill_action)"
+  print_info "Receipt logs: $receipt_logs_saved/$receipt_logs_matched ($receipt_logs_action)"
+  print_info "Paths matched: $paths_matched"
+  print_info "Trash action: $trash_action ($trash_count)"
+
+  if [ "$success" = true ]; then
+    print_success "Done"
+  else
+    exit 1
+  fi
+}
+
+main "$@"
