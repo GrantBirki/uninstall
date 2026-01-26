@@ -14,6 +14,29 @@ print_success() { printf "%b%s%b\n" "$GREEN" "$1" "$OFF"; }
 print_prompt() { printf "%b%s%b" "$PURPLE" "$1" "$OFF"; }
 print_header() { printf "%b%s%b\n" "$BLUE" "$1" "$OFF"; }
 
+escape_regex() {
+  printf "%s" "$1" | sed 's/[][\\.^$*+?(){}|]/\\&/g'
+}
+
+launchd_matches_plist() {
+  local plist content escaped
+  plist="$1"
+  content=$(/usr/bin/plutil -p "$plist" 2> /dev/null) || return 1
+
+  if printf "%s" "$content" | grep -F "$app_path" > /dev/null; then
+    return 0
+  fi
+
+  for id in "${related_bundle_ids[@]}"; do
+    escaped=$(escape_regex "$id")
+    if printf "%s" "$content" | grep -Eq "(^|[^A-Za-z0-9])${escaped}([^A-Za-z0-9]|$)"; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 print_usage() {
   print_info "Usage: uninstall [--dry-run] [--yes] [--verbose] /path/to/app.app"
   print_info "  --dry-run   Show matches and summary without removing anything (default)."
@@ -108,6 +131,10 @@ function main() {
   kill_action="skipped"
   receipt_logs_action="skipped"
   confirmation_result="pending"
+  launch_items_matched=0
+  launch_items_unloaded=0
+  launch_items_failed=0
+  launch_action="skipped"
 
   if [ ! -e "$app_path/Contents/Info.plist" ]; then
     print_error "Cannot find app plist."
@@ -121,10 +148,29 @@ function main() {
     exit 1
   fi
 
+  related_bundle_ids=("$bundle_identifier")
+  while IFS= read -r -d '' plist; do
+    nested_id=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$plist" 2> /dev/null)
+    if [ -n "$nested_id" ]; then
+      case "$nested_id" in
+        "$bundle_identifier"*) related_bundle_ids+=("$nested_id") ;;
+      esac
+    fi
+  done < <(find "$app_path" \( -path "*.app/Contents/Info.plist" -o -path "*.xpc/Contents/Info.plist" -o -path "*.appex/Contents/Info.plist" \) -print0)
+  related_bundle_ids=($(printf "%s\n" "${related_bundle_ids[@]}" | sort -u))
+
   print_info "Checking for running processes…"
   sleep 1
 
-  processes=($(pgrep -afil "$app_name" | grep -v "uninstall"))
+  raw_processes=($(pgrep -afil "$app_name" | grep -v "uninstall"))
+  processes=()
+  for process in "${raw_processes[@]}"; do
+    pid=${process%% *}
+    cmdline=${process#* }
+    case "$cmdline" in
+      "$app_path"/Contents/*) processes+=("$process") ;;
+    esac
+  done
   processes_found=${#processes[@]}
 
   receipt_paths=()
@@ -137,56 +183,76 @@ function main() {
   print_info "Finding app data…"
   sleep 1
 
-  locations=(
-    "$HOME/Library"
-    "$HOME/Library/Application Scripts"
-    "$HOME/Library/Application Support"
-    "$HOME/Library/Application Support/CrashReporter"
-    "$HOME/Library/Containers"
-    "$HOME/Library/Caches"
-    "$HOME/Library/HTTPStorages"
-    "$HOME/Library/Group Containers"
-    "$HOME/Library/Internet Plug-Ins"
-    "$HOME/Library/LaunchAgents"
-    "$HOME/Library/Logs"
-    "$HOME/Library/Preferences"
-    "$HOME/Library/Preferences/ByHost"
-    "$HOME/Library/Saved Application State"
-    "$HOME/Library/WebKit"
-    "/Library"
-    "/Library/Application Support"
-    "/Library/Application Support/CrashReporter"
-    "/Library/Caches"
-    "/Library/Extensions"
-    "/Library/Internet Plug-Ins"
-    "/Library/LaunchAgents"
-    "/Library/LaunchDaemons"
-    "/Library/Logs"
-    "/Library/Preferences"
-    "/Library/PrivilegedHelperTools"
-    "/private/var/db/receipts"
-    "/usr/local/bin"
-    "/usr/local/etc"
-    "/usr/local/opt"
-    "/usr/local/sbin"
-    "/usr/local/share"
-    "/usr/local/var"
-    $(getconf DARWIN_USER_CACHE_DIR | sed "s/\/$//")
-    $(getconf DARWIN_USER_TEMP_DIR | sed "s/\/$//")
-  )
+  bundle_paths=()
+  name_paths=()
+  launch_paths=()
 
-  paths=("$app_path")
+  add_bundle_path() { [ -e "$1" ] && bundle_paths+=("$1"); }
+  add_name_path() { [ -e "$1" ] && name_paths+=("$1"); }
 
-  for location in "${locations[@]}"; do
-    paths+=($(find "$location" -iname "*$app_name*" -maxdepth 1 -prune 2>&1 | grep -v "No such file or directory" | grep -v "Operation not permitted" | grep -v "Permission denied"))
+  user_cache_dir=$(getconf DARWIN_USER_CACHE_DIR | sed "s/\/$//")
+  user_temp_dir=$(getconf DARWIN_USER_TEMP_DIR | sed "s/\/$//")
+
+  for id in "${related_bundle_ids[@]}"; do
+    add_bundle_path "$HOME/Library/Application Scripts/$id"
+    add_bundle_path "$HOME/Library/Containers/$id"
+    add_bundle_path "$HOME/Library/Group Containers/group.$id"
+    add_bundle_path "$HOME/Library/HTTPStorages/$id"
+    add_bundle_path "$HOME/Library/Preferences/$id.plist"
+    for path in "$HOME/Library/Preferences/ByHost/${id}".*.plist; do
+      [ -e "$path" ] && bundle_paths+=("$path")
+    done
+    add_bundle_path "$HOME/Library/Saved Application State/$id.savedState"
+    add_bundle_path "$HOME/Library/WebKit/$id"
+    add_bundle_path "$HOME/Library/Logs/$id"
+    add_bundle_path "$HOME/Library/Caches/$id"
+    add_bundle_path "$HOME/Library/Application Support/$id"
+    add_bundle_path "$HOME/Library/Application Support/CrashReporter/$id"
+
+    add_bundle_path "/Library/Application Support/$id"
+    add_bundle_path "/Library/Application Support/CrashReporter/$id"
+    add_bundle_path "/Library/Caches/$id"
+    add_bundle_path "/Library/Logs/$id"
+    add_bundle_path "/Library/Preferences/$id.plist"
+    add_bundle_path "/Library/PrivilegedHelperTools/$id"
+
+    if [ -n "$user_cache_dir" ]; then
+      add_bundle_path "$user_cache_dir/$id"
+    fi
+    if [ -n "$user_temp_dir" ]; then
+      add_bundle_path "$user_temp_dir/$id"
+    fi
   done
 
-  for location in "${locations[@]}"; do
-    paths+=($(find "$location" -iname "*$bundle_identifier*" -maxdepth 1 -prune 2>&1 | grep -v "No such file or directory" | grep -v "Operation not permitted" | grep -v "Permission denied"))
+  add_name_path "$HOME/Library/Application Support/$app_name"
+  add_name_path "$HOME/Library/Application Support/CrashReporter/$app_name"
+  add_name_path "$HOME/Library/Caches/$app_name"
+  add_name_path "$HOME/Library/Logs/$app_name"
+  add_name_path "$HOME/Library/Saved Application State/$app_name.savedState"
+
+  add_name_path "/Library/Application Support/$app_name"
+  add_name_path "/Library/Application Support/CrashReporter/$app_name"
+  add_name_path "/Library/Caches/$app_name"
+  add_name_path "/Library/Logs/$app_name"
+
+  for dir in "$HOME/Library/LaunchAgents" "/Library/LaunchAgents" "/Library/LaunchDaemons"; do
+    [ -d "$dir" ] || continue
+    for plist in "$dir"/*.plist; do
+      [ -e "$plist" ] || continue
+      if launchd_matches_plist "$plist"; then
+        launch_paths+=("$plist")
+      fi
+    done
   done
 
+  bundle_paths=($(printf "%s\n" "${bundle_paths[@]}" | sort -u))
+  name_paths=($(printf "%s\n" "${name_paths[@]}" | sort -u))
+  launch_paths=($(printf "%s\n" "${launch_paths[@]}" | sort -u))
+
+  paths=("$app_path" "${bundle_paths[@]}" "${name_paths[@]}" "${launch_paths[@]}")
   paths=($(printf "%s\n" "${paths[@]}" | sort -u));
   paths_matched=${#paths[@]}
+  launch_items_matched=${#launch_paths[@]}
 
   print_header "Preflight summary"
   print_info "App: $app_name"
@@ -227,6 +293,40 @@ function main() {
     print_warn "None found."
   fi
 
+  print_header "Launch items"
+  if [ ${#launch_paths[@]} -gt 0 ]; then
+    print_info "Launch items matched: ${#launch_paths[@]}"
+    for path in "${launch_paths[@]}"; do
+      printf "%s\n" "$path"
+    done
+  else
+    print_warn "No launch items found."
+  fi
+
+  print_header "Matched paths"
+  print_info "App bundle:"
+  printf "%s\n" "$app_path"
+
+  print_info "Bundle ID matches: ${#bundle_paths[@]}"
+  if [ ${#bundle_paths[@]} -gt 0 ]; then
+    for path in "${bundle_paths[@]}"; do
+      printf "%s\n" "$path"
+    done
+  else
+    print_warn "No bundle ID matches found."
+  fi
+
+  if [ ${#name_paths[@]} -gt 0 ]; then
+    print_warn "App name matches (review): ${#name_paths[@]}"
+    for path in "${name_paths[@]}"; do
+      printf "%s\n" "$path"
+    done
+  else
+    print_info "App name matches: 0"
+  fi
+
+  print_info "Total matched: ${#paths[@]}"
+
   print_header "Receipts"
   if [ ${#receipt_paths[@]} -gt 0 ]; then
     print_info "Receipt BOMs matched: ${#receipt_paths[@]}"
@@ -235,16 +335,6 @@ function main() {
     done
   else
     print_warn "No receipt BOMs found."
-  fi
-
-  print_header "Matched paths"
-  if [ ${#paths[@]} -gt 0 ]; then
-    print_info "Total matched: ${#paths[@]}"
-    for path in "${paths[@]}"; do
-      printf "%s\n" "$path"
-    done
-  else
-    print_warn "No matching paths found."
   fi
 
   print_header "Planned actions"
@@ -260,11 +350,16 @@ function main() {
   else
     print_warn "No matched paths to move."
   fi
+  if [ ${#launch_paths[@]} -gt 0 ]; then
+    print_info "Unload launch items and move their plists to Trash on confirmation."
+    print_warn "Unloading launch items may prompt for sudo."
+  fi
   if [ ${#receipt_paths[@]} -gt 0 ]; then
     print_info "Save receipt logs to Desktop on confirmation."
   fi
   if [ ${#processes[@]} -gt 0 ]; then
-    print_warn "Killing processes may prompt for sudo."
+    print_info "Attempt to quit the app before terminating remaining processes."
+    print_warn "Running processes will be terminated after confirmation (may prompt for sudo)."
   fi
 
   proceed=false
@@ -299,17 +394,25 @@ function main() {
 
   if [ "$proceed" = true ]; then
     if [ ${#processes[@]} -gt 0 ]; then
-      if [ "$auto_yes" = true ]; then
-        kill_answer="y"
-      else
-        print_prompt "Kill running processes (y or n)? "
-        read -r kill_answer
-      fi
-      if [ "$kill_answer" = "y" ]; then
+      print_info "Attempting to quit app…"
+      osascript -e "tell application id \"$bundle_identifier\" to quit" > /dev/null 2>&1
+      sleep 2
+
+      raw_processes=($(pgrep -afil "$app_name" | grep -v "uninstall"))
+      kill_processes=()
+      for process in "${raw_processes[@]}"; do
+        pid=${process%% *}
+        cmdline=${process#* }
+        case "$cmdline" in
+          "$app_path"/Contents/*) kill_processes+=("$process") ;;
+        esac
+      done
+
+      if [ ${#kill_processes[@]} -gt 0 ]; then
         kill_action="killed"
         print_info "Killing running processes…"
         sleep 1
-        for process in "${processes[@]}"; do
+        for process in "${kill_processes[@]}"; do
           pid=$(printf "%s" "$process" | awk '{print $1}')
           if [ -n "$pid" ]; then
             sudo kill "$pid" 2>&1 | grep -v "No such process"
@@ -317,7 +420,7 @@ function main() {
           fi
         done
       else
-        kill_action="skipped by user"
+        kill_action="quit"
       fi
     else
       kill_action="none"
@@ -335,6 +438,34 @@ function main() {
       receipt_logs_action="saved"
     else
       receipt_logs_action="none"
+    fi
+
+    if [ ${#launch_paths[@]} -gt 0 ]; then
+      print_info "Unloading launch items…"
+      for plist in "${launch_paths[@]}"; do
+        if [[ "$plist" == "/Library/LaunchDaemons/"* ]]; then
+          if sudo launchctl bootout system "$plist" > /dev/null 2>&1; then
+            launch_items_unloaded=$((launch_items_unloaded + 1))
+          else
+            launch_items_failed=$((launch_items_failed + 1))
+          fi
+        else
+          if launchctl bootout "gui/$UID" "$plist" > /dev/null 2>&1; then
+            launch_items_unloaded=$((launch_items_unloaded + 1))
+          elif sudo launchctl bootout "gui/$UID" "$plist" > /dev/null 2>&1; then
+            launch_items_unloaded=$((launch_items_unloaded + 1))
+          else
+            launch_items_failed=$((launch_items_failed + 1))
+          fi
+        fi
+      done
+      if [ "$launch_items_failed" -gt 0 ]; then
+        launch_action="partial"
+      else
+        launch_action="unloaded"
+      fi
+    else
+      launch_action="none"
     fi
 
     if [ ${#paths[@]} -gt 0 ]; then
@@ -357,10 +488,12 @@ function main() {
       kill_action="skipped (not confirmed)"
       receipt_logs_action="skipped (not confirmed)"
       trash_action="skipped (not confirmed)"
+      launch_action="skipped (not confirmed)"
     else
       kill_action="skipped (dry run)"
       receipt_logs_action="skipped (dry run)"
       trash_action="skipped (dry run)"
+      launch_action="skipped (dry run)"
     fi
   fi
 
@@ -369,6 +502,9 @@ function main() {
   fi
   if [ "$receipt_logs_matched" -eq 0 ]; then
     receipt_logs_action="none"
+  fi
+  if [ "$launch_items_matched" -eq 0 ]; then
+    launch_action="none"
   fi
   if [ "$paths_matched" -eq 0 ]; then
     trash_action="skipped (no matches)"
@@ -382,6 +518,7 @@ function main() {
   print_info "Processes found: $processes_found"
   print_info "Processes killed: $processes_killed ($kill_action)"
   print_info "Receipt logs: $receipt_logs_saved/$receipt_logs_matched ($receipt_logs_action)"
+  print_info "Launch items: $launch_items_matched ($launch_action, unloaded: $launch_items_unloaded, failed: $launch_items_failed)"
   print_info "Paths matched: $paths_matched"
   print_info "Trash action: $trash_action ($trash_count)"
 

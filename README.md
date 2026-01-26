@@ -64,6 +64,11 @@ Flags:
 - `--yes`: Skip confirmation prompts and proceed.
 - `--verbose`: Show full running-process command lines.
 
+Behavior:
+
+- Prompts once before changes; after confirmation it attempts to quit/kill app processes and unload matching launch items.
+- Uses bundle ID and app-name matches shown in the preflight report for cleanup.
+
 ## Release 📦
 
 1. Bump `VERSION` (X.Y.Z) and commit.
