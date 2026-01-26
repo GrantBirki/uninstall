@@ -15,9 +15,10 @@ print_prompt() { printf "%b%s%b" "$PURPLE" "$1" "$OFF"; }
 print_header() { printf "%b%s%b\n" "$BLUE" "$1" "$OFF"; }
 
 print_usage() {
-  print_info "Usage: uninstall [--dry-run] [--yes] /path/to/app.app"
+  print_info "Usage: uninstall [--dry-run] [--yes] [--verbose] /path/to/app.app"
   print_info "  --dry-run   Show matches and summary without removing anything (default)."
   print_info "  --yes       Skip confirmation prompts and proceed."
+  print_info "  --verbose   Show full running-process command lines."
 }
 
 function main() {
@@ -26,6 +27,7 @@ function main() {
   dry_run=true
   auto_yes=false
   prompt_for_confirmation=true
+  verbose=false
   seen_dry_run=false
   seen_yes=false
   app_path=""
@@ -46,6 +48,9 @@ function main() {
         seen_dry_run=true
         dry_run=true
         prompt_for_confirmation=false
+        ;;
+      --verbose|-v)
+        verbose=true
         ;;
       --)
         shift
@@ -197,9 +202,27 @@ function main() {
 
   print_header "Running processes"
   if [ ${#processes[@]} -gt 0 ]; then
-    for process in "${processes[@]}"; do
-      printf "%b%s%b\n" "$PURPLE" "$process" "$OFF"
-    done
+    if [ "$verbose" = true ]; then
+      for process in "${processes[@]}"; do
+        printf "%s\n" "$process"
+      done
+    else
+      for process in "${processes[@]}"; do
+        pid=$(printf "%s" "$process" | awk '{print $1}')
+        comm=$(ps -p "$pid" -o comm= 2> /dev/null | sed 's#.*/##')
+        if [ -z "$comm" ]; then
+          comm=$(printf "%s" "$process" | awk '{print $2}')
+        fi
+        if [ -n "$pid" ] && [ -n "$comm" ]; then
+          printf "%s %s\n" "$pid" "$comm"
+        elif [ -n "$pid" ]; then
+          printf "%s\n" "$pid"
+        else
+          printf "%s\n" "$process"
+        fi
+      done
+      print_info "Use --verbose for full command lines."
+    fi
   else
     print_warn "None found."
   fi
