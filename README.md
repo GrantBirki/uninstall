@@ -41,3 +41,7 @@ By default this runs a dry-run and prompts before making changes.
 uninstall --yes /Applications/app_name.app
 uninstall --dry-run /Applications/app_name.app
 ```
+
+---
+
+Inspired by [t18n/uninstall-cli](https://github.com/t18n/uninstall-cli).
