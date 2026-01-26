@@ -240,6 +240,9 @@ function main() {
   if [ ${#receipt_paths[@]} -gt 0 ]; then
     print_info "Save receipt logs to Desktop on confirmation."
   fi
+  if [ ${#processes[@]} -gt 0 ]; then
+    print_warn "Killing processes may prompt for sudo."
+  fi
 
   proceed=false
   if [ "$auto_yes" = true ]; then
