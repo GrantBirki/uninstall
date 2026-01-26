@@ -213,10 +213,10 @@ jobs:
           class Uninstall < Formula
             desc "CLI tool for macOS to uninstall an app from your system"
             homepage "https://github.com/GrantBirki/uninstall"
+            version "${VERSION}"
             url "https://github.com/GrantBirki/uninstall/releases/download/v#{version}/uninstall-#{version}.tar.gz"
             sha256 "${sha}"
             license "MIT"
-            version "${VERSION}"
 
             def install
               bin.install "uninstall"
