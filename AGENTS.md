@@ -20,15 +20,28 @@ These are absolute constraints and must never be violated:
 - Do not do deep or recursive "wide" scans unless explicitly requested and clearly labeled unsafe.
 - Do not add extra confirmation prompts beyond the initial one for the default path (the flow is: preflight -> confirm -> do).
 
-## Default Behavior (No Flags)
+## Default Behavior
 
-- Runs a preflight report and asks once to confirm.
+- With no arguments, prints the same removable-application list as `--list` and exits successfully.
+- With an application target, runs a preflight report and asks once to confirm.
 - If confirmed, it:
   - Attempts to quit the app by bundle ID.
   - Kills remaining app processes that are inside the app bundle.
   - Unloads matching LaunchAgents/LaunchDaemons (verified by plist contents).
   - Moves matched paths to Trash via Finder (not hard delete).
 - Prints a summary report and a final "Done" on success.
+
+## Application Discovery and Resolution
+
+- Search direct children and one nested directory level under `/Applications` and `~/Applications`.
+- Never search `/System/Applications` or `/System/Applications/Utilities`.
+- Include only `.app` directories or symlinks containing `Contents/Info.plist`.
+- Print a case-insensitively sorted, deduplicated list for both zero arguments and `--list`.
+- Treat any target containing `/` as an explicit bundle path. A missing explicit path must fail without name resolution.
+- For pathless targets, ignore an optional trailing `.app` and compare case-insensitively against bundle basenames.
+- Prefer one exact basename match. If there is no exact match, accept one unique literal substring match.
+- Fail closed on multiple exact or partial matches, list the candidates, and require a full path.
+- Preserve the existing preflight and single confirmation after a target resolves uniquely.
 
 ## Matching Strategy (Safety First)
 
@@ -94,6 +107,7 @@ Output:
 
 ## Flags
 
+- `--list`: List installed applications. It cannot be combined with a target, `--yes`, `--dry-run`, or `--verbose`.
 - `--dry-run`: Show matches and summary without removing anything (default).
 - `--yes`: Skip confirmation prompts and proceed.
 - `--verbose`: Show full running process command lines.
@@ -106,6 +120,8 @@ Releases are driven by the `VERSION` file in this repo.
 
 - Update `VERSION` (X.Y.Z) and push to `main`.
 - The GitHub Actions release workflow triggers on `VERSION` changes.
+- The build job runs `bash -n uninstall` and the repository-owned shell tests before packaging.
+- The release job uses the GitHub CLI already installed on the GitHub-hosted runner; it does not download a release tool or run a third-party release Action.
 
 ### Assets
 
@@ -124,11 +140,12 @@ File: `Formula/uninstall.rb`
 Steps:
 
 1. Open the Actions logs for the release workflow and find the "Homebrew tap update details" snippet (job: `release_info`).
-2. Update the formula with:
+2. Record the release's authoritative `published_at` timestamp and wait for the tap's required 14 complete days.
+3. Update the formula with:
    - `version`
    - `url` (must be under the release tag)
    - `sha256` (from the workflow output)
-3. Commit and push the tap repo.
+4. Update the tap's provenance record and follow its required two-commit adoption sequence.
 
 Important:
 - The `version` line must be above the `url` line so `#{version}` is interpolated correctly.
@@ -154,7 +171,9 @@ If updates do not appear, confirm the tap formula version matches the latest rel
 ## Testing / Verification
 
 - Lint: `bash -n uninstall`
+- Fixture tests: `test/uninstall_test.sh`
 - Manual: `./uninstall /Applications/AppName.app` (dry run + confirmation)
+- Manual short name: `./uninstall --dry-run appname`
 - Manual with full process output: `./uninstall --verbose /Applications/AppName.app`
 
 ## Change Guidelines
@@ -162,6 +181,7 @@ If updates do not appear, confirm the tap formula version matches the latest rel
 When modifying `uninstall`:
 
 - Preserve the single confirmation flow.
+- Preserve zero-argument and `--list` equivalence and fail-closed ambiguity handling.
 - Keep safe matching rules; do not add vendor‑prefix or broad substring matching.
 - Keep launch item matching strict (plist content must reference app path or bundle IDs).
 - Keep output readable; use color for emphasis only.
@@ -171,4 +191,5 @@ When modifying releases:
 
 - Only bump `VERSION` when ready to release.
 - Ensure the GitHub Actions release workflow remains pinned to action SHAs.
+- Use `# pin@vX.X.X` comments for pinned Actions and adopt only releases that have completed the repository's review cooldown.
 - Ensure the release snippet continues to output correct formula info.

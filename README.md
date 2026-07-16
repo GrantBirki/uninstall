@@ -35,31 +35,42 @@ brew info uninstall
 2. Create an alias in your shell by adding this line
 
    ```bash
-   alias uninstall="~/<your_cloned_path>/uninstall-cli.sh"
+   alias uninstall="~/<your_cloned_path>/uninstall"
    ```
 
 3. Usage: In your terminal:
 
    ```bash
-   uninstall /Applications/<name_of_your_app>.app 
+   uninstall raycast
    ```
 
 ## Usage 💻
 
 ```bash
+uninstall
+uninstall --list
+uninstall raycast
+uninstall "Visual Studio Code"
 uninstall /Applications/app_name.app
 ```
 
-By default this runs a dry-run and prompts before making changes.
+With no arguments, `uninstall` prints the same installed-application list as `uninstall --list`. The list contains one absolute path per line and a total so a path can be copied directly into an uninstall command.
+
+Application discovery searches direct children and one nested directory level under `/Applications` and `~/Applications`. It includes only `.app` directories or symlinks containing `Contents/Info.plist`. It does not search protected applications under `/System/Applications`.
+
+A target containing `/` is treated as an explicit bundle path and must exist. A target without `/` is matched case-insensitively against discovered bundle names, with an optional trailing `.app` ignored. An exact name wins; otherwise one unique literal substring match is accepted. Multiple matches are listed without making changes, and the command must be rerun with a full path.
+
+After a target resolves uniquely, the normal preflight runs. By default, the command asks once before making changes.
 
 ```bash
-uninstall --yes /Applications/app_name.app
-uninstall --dry-run /Applications/app_name.app
-uninstall --verbose /Applications/app_name.app
+uninstall --dry-run raycast
+uninstall --verbose raycast
+uninstall --yes /Applications/Raycast.app
 ```
 
 Flags:
 
+- `--list`: List installed applications. It cannot be combined with an application or uninstall flags.
 - `--dry-run`: Show matches and summary without removing anything (default).
 - `--yes`: Skip confirmation prompts and proceed.
 - `--verbose`: Show full running-process command lines.
@@ -72,9 +83,9 @@ Behavior:
 ## Release 📦
 
 1. Bump `VERSION` (X.Y.Z) and commit.
-2. Push to `main`. The release workflow triggers on changes to `VERSION` and creates tag `vX.Y.Z` plus release assets.
+2. Push to `main`. The release workflow runs the repository-owned tests, triggers on changes to `VERSION`, and creates tag `vX.Y.Z` plus release assets with the GitHub CLI installed on the hosted runner.
 3. Open the Actions logs for the release workflow and copy the "Homebrew tap update details" snippet (job: `release_info`).
-4. Update [`Formula/uninstall.rb`](https://github.com/GrantBirki/homebrew-tap/blob/main/Formula/uninstall.rb) in the `homebrew-tap` repo with the new `version`, `url`, and `sha256`, then commit and push.
+4. After the tap's required 14-day cooldown, update [`Formula/uninstall.rb`](https://github.com/GrantBirki/homebrew-tap/blob/main/Formula/uninstall.rb) in the `homebrew-tap` repo with the new `version`, `url`, and `sha256`, then update its provenance record.
 
 Triggering a new release is just updating `VERSION` on `main` (or running the workflow manually) since the workflow keys off that file.
 
