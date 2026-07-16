@@ -26,7 +26,7 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v6.0.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # pin@v7.0.0
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -47,6 +47,11 @@ jobs:
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: test
+        run: |
+          bash -n uninstall
+          test/uninstall_test.sh
 
       - name: package
         id: package
@@ -82,12 +87,12 @@ jobs:
           fi
 
       - name: attest build provenance
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # pin@v4.1.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # pin@v4.1.1
         with:
           subject-path: "dist/${{ steps.package.outputs.artifact }}"
 
       - name: upload artifact
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # pin@v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # pin@v7.0.1
         id: upload-artifact
         with:
           name: dist
@@ -101,42 +106,62 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v6.0.2
-        with:
-          fetch-depth: 0
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # pin@8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # pin@v8.0.1
         with:
           artifact-ids: ${{ needs.build.outputs.artifact-id }}
           path: "dist/"
 
       - name: ensure tag does not exist
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.build.outputs.tag }}
         run: |
-          if git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "GitHub CLI is required but was not found on the runner."
+            exit 1
+          fi
+
+          set +e
+          tag_lookup=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" 2>&1)
+          tag_lookup_status=$?
+          set -e
+
+          if [[ "$tag_lookup_status" -eq 0 ]]; then
             echo "Tag already exists: ${TAG}"
             exit 1
           fi
 
+          if [[ "$tag_lookup" != *"HTTP 404"* ]]; then
+            echo "Unable to confirm that tag ${TAG} does not exist."
+            printf '%s\n' "$tag_lookup"
+            exit 1
+          fi
+
       - name: create release
-        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # pin@v2.6.1
-        with:
-          tag_name: ${{ needs.build.outputs.tag }}
-          name: ${{ needs.build.outputs.tag }}
-          target_commitish: ${{ github.sha }}
-          files: |
-            dist/uninstall-${{ needs.build.outputs.version }}.tar.gz
-            dist/uninstall-${{ needs.build.outputs.version }}.tar.gz.sha256
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "GitHub CLI is required but was not found on the runner."
+            exit 1
+          fi
+
+          gh release create "$TAG" \
+            "dist/uninstall-${VERSION}.tar.gz" \
+            "dist/uninstall-${VERSION}.tar.gz.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes
 
   verify:
     permissions: {}
     runs-on: ubuntu-latest
     needs: [build, release]
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # pin@8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # pin@v8.0.1
         with:
           artifact-ids: ${{ needs.build.outputs.artifact-id }}
           path: "dist/"
@@ -178,7 +203,7 @@ jobs:
     needs: [build, release, verify]
     if: ${{ always() }}
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # pin@8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # pin@v8.0.1
         with:
           artifact-ids: ${{ needs.build.outputs.artifact-id }}
           path: "dist/"
