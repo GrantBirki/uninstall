@@ -1,5 +1,7 @@
 # uninstall 🗑️
 
+[![test](https://github.com/GrantBirki/uninstall/actions/workflows/test.yml/badge.svg)](https://github.com/GrantBirki/uninstall/actions/workflows/test.yml)
+
 CLI tool for macOS to uninstall an app from your system
 
 This script is an open-sourced alternative for [App Cleaner](https://freemacsoft.net/appcleaner/) on Mac OS

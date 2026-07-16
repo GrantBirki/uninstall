@@ -16,6 +16,10 @@ print_success() { printf "%b%s%b\n" "$GREEN" "$1" "$OFF"; }
 print_prompt() { printf "%b%s%b" "$PURPLE" "$1" "$OFF"; }
 print_header() { printf "%b%s%b\n" "$BLUE" "$1" "$OFF"; }
 
+sort_applications() {
+  LC_ALL=C sort -f | uniq
+}
+
 discover_applications() {
   local root app
 
@@ -26,7 +30,7 @@ discover_applications() {
       [ -e "$app/Contents/Info.plist" ] || continue
       printf "%s\n" "$app"
     done < <(find "$root" -mindepth 1 -maxdepth 2 \( -type d -o -type l \) -name "*.app" -prune -print0 2> /dev/null)
-  done | LC_ALL=C sort -fu
+  done | sort_applications
 }
 
 print_installed_applications() {

@@ -36,7 +36,7 @@ These are absolute constraints and must never be violated:
 - Search direct children and one nested directory level under `/Applications` and `~/Applications`.
 - Never search `/System/Applications` or `/System/Applications/Utilities`.
 - Include only `.app` directories or symlinks containing `Contents/Info.plist`.
-- Print a case-insensitively sorted, deduplicated list for both zero arguments and `--list`.
+- Print a case-insensitively sorted list for both zero arguments and `--list`, deduplicating only byte-identical paths so case-distinct candidates remain visible and ambiguous.
 - Treat any target containing `/` as an explicit bundle path. A missing explicit path must fail without name resolution.
 - For pathless targets, ignore an optional trailing `.app` and compare case-insensitively against bundle basenames.
 - Prefer one exact basename match. If there is no exact match, accept one unique literal substring match.

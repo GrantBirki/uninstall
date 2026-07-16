@@ -98,6 +98,24 @@ assert_equal "$APPLICATIONS_DIR/Raycast.app" "$RESOLVED_APP_PATH" "matching shou
 resolve_application "visual studio" "${APPLICATION_ROOTS[@]}"
 assert_equal "$USER_APPLICATIONS_DIR/Visual Studio Code.app" "$RESOLVED_APP_PATH" "matching should accept one unique partial match"
 
+case_distinct_discovery=$(printf "%s\n" \
+  "/Applications/Foo.app" \
+  "/Applications/foo.app" \
+  "/Applications/Foo.app" | sort_applications)
+assert_equal $'/Applications/Foo.app\n/Applications/foo.app' "$case_distinct_discovery" "sorting should deduplicate only byte-identical paths"
+
+case_distinct_resolution=$(
+  discover_applications() {
+    printf "%s\n" "/Applications/Foo.app" "/Applications/foo.app"
+  }
+  set +e
+  resolve_application "foo" "unused-root"
+  status=$?
+  set -e
+  printf "%s:%s\n" "$status" "${#RESOLUTION_MATCHES[@]}"
+)
+assert_equal "2:2" "$case_distinct_resolution" "case-distinct exact matches should both remain ambiguous"
+
 make_app "$USER_APPLICATIONS_DIR/Raycast.app"
 set +e
 resolve_application "raycast" "${APPLICATION_ROOTS[@]}"
