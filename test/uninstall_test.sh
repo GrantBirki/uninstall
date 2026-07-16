@@ -163,6 +163,22 @@ if [ -x /usr/libexec/PlistBuddy ] && [ -x /usr/bin/plutil ]; then
   decline_output=$(printf "n\n" | main "$DIRECT_APP" 2>&1)
   assert_contains "$decline_output" "Uninstall cancelled by user" "declining should cancel the uninstall"
   [ -e "$DIRECT_APP/Contents/Info.plist" ] || fail "declining removed the fixture app"
+
+  mkdir -p "$HOME/Library/Caches/com.example.uninstall-fixture"
+  move_path_to_trash() {
+    case "$1" in
+      "$HOME/Library/Caches/com.example.uninstall-fixture") return 1 ;;
+      *) return 0 ;;
+    esac
+  }
+
+  set +e
+  partial_output=$(main --yes "$DIRECT_APP" 2>&1)
+  status=$?
+  set -e
+  assert_equal "1" "$status" "a partial Trash move should fail the command"
+  assert_contains "$partial_output" "Move to Trash failed: $HOME/Library/Caches/com.example.uninstall-fixture" "partial failure should identify only the failed path"
+  assert_contains "$partial_output" "Trash action: partial (moved: 1, failed: 1)" "partial failure should report accurate counts"
 fi
 
 printf "All uninstall tests passed.\n"

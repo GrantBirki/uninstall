@@ -129,6 +129,14 @@ launchd_matches_plist() {
   return 1
 }
 
+move_path_to_trash() {
+  /usr/bin/osascript \
+    -e 'on run argv' \
+    -e 'tell application "Finder" to delete POSIX file (item 1 of argv)' \
+    -e 'end run' \
+    "$1" > /dev/null 2>&1
+}
+
 print_usage() {
   print_info "Usage:"
   print_info "  uninstall"
@@ -288,6 +296,7 @@ function main() {
   paths_matched=0
   trash_action="skipped"
   trash_count=0
+  trash_failed=0
   kill_action="skipped"
   receipt_logs_action="skipped"
   confirmation_result="pending"
@@ -631,14 +640,22 @@ function main() {
     if [ ${#paths[@]} -gt 0 ]; then
       print_info "Moving app data to trash…"
       sleep 1
-      posixFiles=$(printf ", POSIX file \"%s\"" "${paths[@]}" | awk '{print substr($0,3)}')
-      if osascript -e "tell application \"Finder\" to delete { $posixFiles }" > /dev/null; then
+      for path in "${paths[@]}"; do
+        if move_path_to_trash "$path"; then
+          trash_count=$((trash_count + 1))
+        else
+          trash_failed=$((trash_failed + 1))
+          success=false
+          print_error "Move to Trash failed: $path"
+        fi
+      done
+
+      if [ "$trash_failed" -eq 0 ]; then
         trash_action="moved"
-        trash_count=${#paths[@]}
+      elif [ "$trash_count" -gt 0 ]; then
+        trash_action="partial"
       else
         trash_action="failed"
-        success=false
-        print_error "Move to Trash failed. Check Finder permissions."
       fi
     else
       trash_action="skipped (no matches)"
@@ -669,6 +686,7 @@ function main() {
   if [ "$paths_matched" -eq 0 ]; then
     trash_action="skipped (no matches)"
     trash_count=0
+    trash_failed=0
   fi
 
   print_header "Summary report"
@@ -680,7 +698,7 @@ function main() {
   print_info "Receipt logs: $receipt_logs_saved/$receipt_logs_matched ($receipt_logs_action)"
   print_info "Launch items: $launch_items_matched ($launch_action, unloaded: $launch_items_unloaded, failed: $launch_items_failed)"
   print_info "Paths matched: $paths_matched"
-  print_info "Trash action: $trash_action ($trash_count)"
+  print_info "Trash action: $trash_action (moved: $trash_count, failed: $trash_failed)"
 
   if [ "$success" = true ]; then
     print_success "Done"
