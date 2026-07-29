@@ -13,11 +13,23 @@ fail() {
 }
 
 extract_action_references() {
-  local uses_line line_without_comment uses
+  local uses_line line_without_comment normalized_line action_key uses
 
   while IFS= read -r uses_line; do
     line_without_comment="${uses_line%%#*}"
-    uses="${line_without_comment#*:}"
+    [[ "$line_without_comment" =~ $ACTION_KEY_PATTERN ]] || continue
+
+    normalized_line="${line_without_comment#"${line_without_comment%%[![:space:]]*}"}"
+    if [[ "$normalized_line" == -* ]]; then
+      normalized_line="${normalized_line#-}"
+      normalized_line="${normalized_line#"${normalized_line%%[![:space:]]*}"}"
+    fi
+
+    action_key="${normalized_line%%:*}"
+    action_key=$(printf '%s' "$action_key" | sed -E "s/^[[:space:]\"']+//; s/[[:space:]\"']+$//")
+    [[ "$action_key" == "uses" ]] || continue
+
+    uses="${normalized_line#*:}"
     uses=$(printf '%s' "$uses" | sed -E "s/^[[:space:]\"']+//; s/[[:space:]\"']+$//")
     printf '%s\n' "$uses"
   done
@@ -25,13 +37,13 @@ extract_action_references() {
 
 parser_fixture=$(
   printf '%s\n' \
-    '      - "uses": actions/checkout@1111111111111111111111111111111111111111 # trailing uses: attacker/action@main' \
-    "      - 'uses': openai/fence@2222222222222222222222222222222222222222" \
+    '      - uses: actions/checkout@1111111111111111111111111111111111111111' \
+    '      - "uses": openai/fence@2222222222222222222222222222222222222222 # trailing uses: attacker/action@main' \
+    "        'uses': actions/upload-artifact@3333333333333333333333333333333333333333" \
     '      - run: echo "uses: attacker/action@main"' |
-    grep -E "$ACTION_KEY_PATTERN" |
     extract_action_references
 )
-expected_parser_fixture=$'actions/checkout@1111111111111111111111111111111111111111\nopenai/fence@2222222222222222222222222222222222222222'
+expected_parser_fixture=$'actions/checkout@1111111111111111111111111111111111111111\nopenai/fence@2222222222222222222222222222222222222222\nactions/upload-artifact@3333333333333333333333333333333333333333'
 [[ "$parser_fixture" == "$expected_parser_fixture" ]] || fail "action parser regression fixture failed"
 
 if grep -R -n -E '^[[:space:]]*pull_request_target:' "$WORKFLOW_DIR" >/dev/null; then
