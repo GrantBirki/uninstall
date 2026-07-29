@@ -3,6 +3,8 @@
 set -e
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+"$ROOT_DIR/test/ci_policy_test.sh"
+
 TEST_ROOT=$(mktemp -d)
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
