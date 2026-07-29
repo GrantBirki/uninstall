@@ -72,6 +72,31 @@ fence_name_count=$(grep -R -h -E '^[[:space:]]+- name:[[:space:]]*fence[[:space:
 if [[ "$ubuntu_job_count" != "$fence_count" || "$fence_count" != "$fence_name_count" ]]; then
   fail "every supported Ubuntu job must start with a step named fence"
 fi
+if awk '
+  function finish_step() {
+    if (is_fence && is_audit && allows_artifacts) {
+      invalid = 1
+    }
+  }
+
+  /^[[:space:]]+- name:/ {
+    finish_step()
+    is_fence = 0
+    is_audit = 0
+    allows_artifacts = 0
+  }
+
+  /uses:[[:space:]]*openai\/fence@/ { is_fence = 1 }
+  /^[[:space:]]+mode:[[:space:]]*audit[[:space:]]*$/ { is_audit = 1 }
+  /^[[:space:]]+allow_github_artifacts:[[:space:]]*true[[:space:]]*$/ { allows_artifacts = 1 }
+
+  END {
+    finish_step()
+    exit invalid ? 0 : 1
+  }
+' "$RELEASE_WORKFLOW"; then
+  fail "Fence audit mode cannot enable GitHub artifact access"
+fi
 
 grep -q "branches:" "$RELEASE_WORKFLOW" || fail "release workflow must restrict its branch"
 grep -q -- "- main" "$RELEASE_WORKFLOW" || fail "release workflow must target main"
