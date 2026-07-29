@@ -5,11 +5,34 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 WORKFLOW_DIR="$ROOT_DIR/.github/workflows"
 RELEASE_WORKFLOW="$WORKFLOW_DIR/release.yml"
+ACTION_KEY_PATTERN="^[[:space:]]*(-[[:space:]]*)?(uses|\"uses\"|'uses')[[:space:]]*:"
 
 fail() {
   echo "GitHub Actions policy: $1" >&2
   exit 1
 }
+
+extract_action_references() {
+  local uses_line line_without_comment uses
+
+  while IFS= read -r uses_line; do
+    line_without_comment="${uses_line%%#*}"
+    uses="${line_without_comment#*:}"
+    uses=$(printf '%s' "$uses" | sed -E "s/^[[:space:]\"']+//; s/[[:space:]\"']+$//")
+    printf '%s\n' "$uses"
+  done
+}
+
+parser_fixture=$(
+  printf '%s\n' \
+    '      - "uses": actions/checkout@1111111111111111111111111111111111111111 # trailing uses: attacker/action@main' \
+    "      - 'uses': openai/fence@2222222222222222222222222222222222222222" \
+    '      - run: echo "uses: attacker/action@main"' |
+    grep -E "$ACTION_KEY_PATTERN" |
+    extract_action_references
+)
+expected_parser_fixture=$'actions/checkout@1111111111111111111111111111111111111111\nopenai/fence@2222222222222222222222222222222222222222'
+[[ "$parser_fixture" == "$expected_parser_fixture" ]] || fail "action parser regression fixture failed"
 
 if grep -R -n -E '^[[:space:]]*pull_request_target:' "$WORKFLOW_DIR" >/dev/null; then
   fail "pull_request_target is prohibited"
@@ -28,8 +51,7 @@ while IFS= read -r cache_line; do
   fi
 done < <(grep -R -h -E '^[[:space:]]+(bundler-)?cache:' "$WORKFLOW_DIR" || true)
 
-while IFS= read -r uses_line; do
-  uses=$(sed -E 's/.*uses:[[:space:]]*//; s/[[:space:]#].*$//' <<< "$uses_line")
+while IFS= read -r uses; do
   [[ "$uses" == ./* ]] && continue
 
   action="${uses%%@*}"
@@ -41,7 +63,11 @@ while IFS= read -r uses_line; do
   if [[ ! "$uses" =~ @[0-9a-fA-F]{40}$ ]] && [[ ! "$uses" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
     fail "action is not pinned to an immutable digest: $uses"
   fi
-done < <(grep -R -h -E 'uses:[[:space:]]*' "$WORKFLOW_DIR")
+done < <(
+  {
+    grep -R -h -E "$ACTION_KEY_PATTERN" "$WORKFLOW_DIR" || true
+  } | extract_action_references
+)
 
 checkout_count=$(grep -R -h -E 'uses:[[:space:]]*actions/checkout@' "$WORKFLOW_DIR" | wc -l | tr -d ' ')
 nonpersisted_count=$(grep -R -h -E '^[[:space:]]+persist-credentials:[[:space:]]*false[[:space:]]*$' "$WORKFLOW_DIR" | wc -l | tr -d ' ')
@@ -101,6 +127,7 @@ fi
 grep -q "branches:" "$RELEASE_WORKFLOW" || fail "release workflow must restrict its branch"
 grep -q -- "- main" "$RELEASE_WORKFLOW" || fail "release workflow must target main"
 grep -F -q "github.workflow_sha == github.sha" "$RELEASE_WORKFLOW" || fail "release workflow definition must match the source commit"
+grep -E -q "needs\\.build\\.result == 'success'.*needs\\.release\\.result == 'success'" "$RELEASE_WORKFLOW" || fail "release info must require successful build and release jobs"
 if grep -q "workflow_dispatch:" "$RELEASE_WORKFLOW"; then
   fail "release workflow must not have a manual dispatch path"
 fi
