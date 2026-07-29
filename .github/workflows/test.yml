@@ -17,7 +17,16 @@ jobs:
       - name: checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # pin@v7.0.0
         with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
           persist-credentials: false
+
+      - name: verify checkout
+        run: |
+          if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+            echo "Checked-out commit does not match GITHUB_SHA."
+            exit 1
+          fi
 
       - name: test
         run: |

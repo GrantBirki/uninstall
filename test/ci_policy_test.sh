@@ -48,6 +48,30 @@ nonpersisted_count=$(grep -R -h -E '^[[:space:]]+persist-credentials:[[:space:]]
 if [[ "$checkout_count" != "$nonpersisted_count" ]]; then
   fail "every checkout must set persist-credentials: false"
 fi
+sha_ref_count=$(grep -R -h -F 'ref: ${{ github.sha }}' "$WORKFLOW_DIR" | wc -l | tr -d ' ')
+if [[ "$checkout_count" != "$sha_ref_count" ]]; then
+  fail "every checkout must use the immutable event commit"
+fi
+shallow_count=$(grep -R -h -E '^[[:space:]]+fetch-depth:[[:space:]]*1[[:space:]]*$' "$WORKFLOW_DIR" | wc -l | tr -d ' ')
+if [[ "$checkout_count" != "$shallow_count" ]]; then
+  fail "every checkout must fetch only the event commit"
+fi
+checkout_verification_count=$(grep -R -h -F 'git rev-parse HEAD' "$WORKFLOW_DIR" | wc -l | tr -d ' ')
+if [[ "$checkout_count" != "$checkout_verification_count" ]]; then
+  fail "every checkout must verify HEAD against GITHUB_SHA"
+fi
+
+expected_fence='openai/fence@2cf00d32716021a106bb59fcdc1c978c22a3def3 # pin@v0.9.2'
+while IFS= read -r fence_line; do
+  [[ "$fence_line" == *"$expected_fence"* ]] || fail "Fence must use the verified v0.9.2 release pin: $fence_line"
+done < <(grep -R -h -E 'uses:[[:space:]]*openai/fence@' "$WORKFLOW_DIR")
+
+ubuntu_job_count=$(grep -R -h -E '^[[:space:]]+runs-on:[[:space:]]*ubuntu-24\.04[[:space:]]*$' "$WORKFLOW_DIR" | wc -l | tr -d ' ')
+fence_count=$(grep -R -h -E 'uses:[[:space:]]*openai/fence@' "$WORKFLOW_DIR" | wc -l | tr -d ' ')
+fence_name_count=$(grep -R -h -E '^[[:space:]]+- name:[[:space:]]*fence[[:space:]]*$' "$WORKFLOW_DIR" | wc -l | tr -d ' ')
+if [[ "$ubuntu_job_count" != "$fence_count" || "$fence_count" != "$fence_name_count" ]]; then
+  fail "every supported Ubuntu job must start with a step named fence"
+fi
 
 grep -q "branches:" "$RELEASE_WORKFLOW" || fail "release workflow must restrict its branch"
 grep -q -- "- main" "$RELEASE_WORKFLOW" || fail "release workflow must target main"
