@@ -13,7 +13,7 @@ fail() {
 }
 
 validate_workflow_steps() {
-  awk -v expected_fence="openai/fence@2cf00d32716021a106bb59fcdc1c978c22a3def3" '
+  awk -v expected_fence="openai/fence@e6b39c80c51cb2b2a39448ddeff74b3b886c0a63" '
     function trim(value) {
       sub(/^[[:space:]]+/, "", value)
       sub(/[[:space:]]+$/, "", value)
@@ -51,7 +51,7 @@ validate_workflow_steps() {
           step_name = value
         } else if (key == "uses") {
           step_uses = value
-          if (raw ~ /#[[:space:]]*pin@v0\.9\.2[[:space:]]*$/) {
+          if (raw ~ /#[[:space:]]*pin@v0\.10\.0[[:space:]]*$/) {
             fence_pin_comment = "true"
           }
         } else if (key == "with" && value == "") {
@@ -130,7 +130,7 @@ validate_workflow_steps() {
           report("Fence step " step_number " must be named fence")
         }
         if (step_uses != expected_fence || !fence_pin_comment) {
-          report("Fence step " step_number " must use the verified v0.9.2 release pin")
+          report("Fence step " step_number " must use the verified v0.10.0 release pin")
         }
         if (!first_step) {
           report("Fence step " step_number " must be the first meaningful step")
@@ -293,7 +293,7 @@ quoted_fence_fixture=$(
     '    runs-on: ubuntu-24.04' \
     '    steps:' \
     '      - name: fence' \
-    "        'uses': openai/fence@2cf00d32716021a106bb59fcdc1c978c22a3def3 # pin@v0.9.2" \
+    "        'uses': openai/fence@e6b39c80c51cb2b2a39448ddeff74b3b886c0a63 # pin@v0.10.0" \
     '        with:' \
     '          mode: audit'
 )
@@ -305,7 +305,7 @@ spoofed_fence_fixture=$(
     '  test:' \
     '    runs-on: ubuntu-24.04' \
     '    steps:' \
-    "      - 'uses': openai/fence@2cf00d32716021a106bb59fcdc1c978c22a3def3 # pin@v0.9.2" \
+    "      - 'uses': openai/fence@e6b39c80c51cb2b2a39448ddeff74b3b886c0a63 # pin@v0.10.0" \
     '        name: restrict network' \
     '      - name: fence' \
     '        run: echo spoof'
