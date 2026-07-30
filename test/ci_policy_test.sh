@@ -420,5 +420,8 @@ fi
 [[ "$(grep -c 'environment: release' "$RELEASE_WORKFLOW")" -ge 2 ]] || fail "attestation and publication must use the protected release environment"
 grep -q -- "--source-digest" "$RELEASE_WORKFLOW" || fail "attestation verification must bind the source commit"
 grep -q -- "--signer-digest" "$RELEASE_WORKFLOW" || fail "attestation verification must bind the signer workflow commit"
+grep -F -q 'bundle-artifact-id: ${{ steps.upload-attestation.outputs.artifact-id }}' "$RELEASE_WORKFLOW" || fail "attestation bundle upload must expose its immutable artifact ID"
+grep -F -q 'artifact-ids: ${{ needs.attest.outputs.bundle-artifact-id }}' "$RELEASE_WORKFLOW" || fail "verification must download the exact attestation bundle artifact"
+grep -F -q -- '--bundle "$bundle_path"' "$RELEASE_WORKFLOW" || fail "attestation verification must use the downloaded offline bundle"
 
 echo "GitHub Actions policy: OK"
