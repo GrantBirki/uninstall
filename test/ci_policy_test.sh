@@ -135,8 +135,8 @@ validate_workflow_steps() {
         if (!first_step) {
           report("Fence step " step_number " must be the first meaningful step")
         }
-        if (fence_mode == "audit" && allow_github_artifacts == "true") {
-          report("Fence audit mode cannot enable GitHub artifact access")
+        if (fence_mode != "") {
+          report("Fence step " step_number " must use default standard block mode without a mode input")
         }
       }
     }
@@ -293,11 +293,24 @@ quoted_fence_fixture=$(
     '    runs-on: ubuntu-24.04' \
     '    steps:' \
     '      - name: fence' \
-    "        'uses': openai/fence@e6b39c80c51cb2b2a39448ddeff74b3b886c0a63 # pin@v0.10.0" \
+    "        'uses': openai/fence@e6b39c80c51cb2b2a39448ddeff74b3b886c0a63 # pin@v0.10.0"
+)
+validate_workflow_steps <(printf '%s\n' "$quoted_fence_fixture") >/dev/null 2>&1 || fail "quoted Fence action regression fixture failed"
+
+audit_fence_fixture=$(
+  printf '%s\n' \
+    'jobs:' \
+    '  test:' \
+    '    runs-on: ubuntu-24.04' \
+    '    steps:' \
+    '      - name: fence' \
+    '        uses: openai/fence@e6b39c80c51cb2b2a39448ddeff74b3b886c0a63 # pin@v0.10.0' \
     '        with:' \
     '          mode: audit'
 )
-validate_workflow_steps <(printf '%s\n' "$quoted_fence_fixture") >/dev/null 2>&1 || fail "quoted Fence action regression fixture failed"
+if validate_workflow_steps <(printf '%s\n' "$audit_fence_fixture") >/dev/null 2>&1; then
+  fail "Fence audit-mode regression fixture passed unexpectedly"
+fi
 
 spoofed_fence_fixture=$(
   printf '%s\n' \
@@ -318,6 +331,73 @@ for workflow in "$WORKFLOW_DIR"/*.yml "$WORKFLOW_DIR"/*.yaml; do
   [[ -e "$workflow" ]] || continue
   validate_workflow_steps "$workflow" || fail "unsafe workflow step configuration"
 done
+
+release_fence_policy=$(
+  awk '
+    /^  [[:alnum:]_-]+:[[:space:]]*$/ {
+      job = $0
+      sub(/^  /, "", job)
+      sub(/:[[:space:]]*$/, "", job)
+    }
+
+    /^      - name: fence[[:space:]]*$/ {
+      in_fence = 1
+      print "[" job "]"
+      next
+    }
+
+    in_fence && /^      - / {
+      in_fence = 0
+    }
+
+    in_fence {
+      if ($0 ~ /^[[:space:]]*$/) {
+        next
+      }
+
+      line = $0
+      sub(/^        /, "", line)
+      print line
+    }
+  ' "$RELEASE_WORKFLOW"
+)
+expected_release_fence_policy=$(
+  cat <<'POLICY'
+[build]
+uses: openai/fence@e6b39c80c51cb2b2a39448ddeff74b3b886c0a63 # pin@v0.10.0
+with:
+  allow_github_artifacts: true
+[attest]
+uses: openai/fence@e6b39c80c51cb2b2a39448ddeff74b3b886c0a63 # pin@v0.10.0
+with:
+  allow_github_artifacts: true
+  allowlist: |
+    fulcio.sigstore.dev
+    rekor.sigstore.dev
+[verify]
+uses: openai/fence@e6b39c80c51cb2b2a39448ddeff74b3b886c0a63 # pin@v0.10.0
+with:
+  allow_github_artifacts: true
+  allowlist: |
+    tuf-repo-cdn.sigstore.dev
+    tuf-repo.github.com
+[release]
+uses: openai/fence@e6b39c80c51cb2b2a39448ddeff74b3b886c0a63 # pin@v0.10.0
+with:
+  allow_github_artifacts: true
+  allowlist: |
+    uploads.github.com
+[release_info]
+uses: openai/fence@e6b39c80c51cb2b2a39448ddeff74b3b886c0a63 # pin@v0.10.0
+with:
+  allow_github_artifacts: true
+POLICY
+)
+if [[ "$release_fence_policy" != "$expected_release_fence_policy" ]]; then
+  printf 'Expected release Fence policy:\n%s\n' "$expected_release_fence_policy" >&2
+  printf 'Actual release Fence policy:\n%s\n' "$release_fence_policy" >&2
+  fail "release jobs must use the exact reviewed standard-block policy"
+fi
 
 checkout_count=$(grep -R -h -E "$CHECKOUT_ACTION_PATTERN" "$WORKFLOW_DIR" | wc -l | tr -d ' ')
 checkout_verification_count=$(grep -R -h -F 'git rev-parse HEAD' "$WORKFLOW_DIR" | wc -l | tr -d ' ')
