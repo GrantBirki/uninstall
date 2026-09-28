@@ -72,6 +72,12 @@ make_app "$APPLICATIONS_DIR/Vendor/Products/Too Deep.app"
 make_app "$TEST_ROOT/Linked Source.app"
 ln -s "$TEST_ROOT/Linked Source.app" "$APPLICATIONS_DIR/Linked.app"
 
+if move_path_to_trash "$APPLICATIONS_DIR/Linked.app"; then
+  fail "a symlink must fail safely instead of trashing its target"
+fi
+[ -L "$APPLICATIONS_DIR/Linked.app" ] || fail "symlink was unexpectedly removed"
+[ -e "$TEST_ROOT/Linked Source.app/Contents/Info.plist" ] || fail "symlink target was removed"
+
 no_args_output=$(main)
 list_output=$(main --list)
 assert_equal "$no_args_output" "$list_output" "no arguments and --list should match"

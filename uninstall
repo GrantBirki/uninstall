@@ -134,9 +134,12 @@ launchd_matches_plist() {
 }
 
 move_path_to_trash() {
+  # Finder aliases can resolve a symlink to an unrelated app or data directory.
+  [ ! -L "$1" ] || return 1
   /usr/bin/osascript \
     -e 'on run argv' \
-    -e 'tell application "Finder" to delete POSIX file (item 1 of argv)' \
+    -e 'set targetItem to POSIX file (item 1 of argv)' \
+    -e 'tell application "Finder" to delete targetItem' \
     -e 'end run' \
     "$1" > /dev/null 2>&1
 }
