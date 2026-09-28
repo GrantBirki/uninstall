@@ -294,6 +294,12 @@ function main() {
       ;;
   esac
 
+  if [ -L "$app_path" ]; then
+    print_error "Cannot uninstall a symlink app: $app_path"
+    print_info "Run uninstall again with the full path to the actual app bundle."
+    return 1
+  fi
+
   app_name=$(basename "$app_path" .app)
   success=true
   processes_found=0

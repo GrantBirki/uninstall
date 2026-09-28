@@ -90,6 +90,18 @@ assert_contains "$list_output" "Total: 4" "list should report the total"
 assert_not_contains "$list_output" "$APPLICATIONS_DIR/Broken.app" "list should exclude bundles without Info.plist"
 assert_not_contains "$list_output" "Too Deep.app" "list should exclude deeply nested bundles"
 
+for linked_target in "$APPLICATIONS_DIR/Linked.app" "Linked"; do
+  set +e
+  linked_output=$(main --yes "$linked_target" 2>&1)
+  status=$?
+  set -e
+  assert_equal "1" "$status" "symlink apps must be rejected before uninstall"
+  assert_contains "$linked_output" "Cannot uninstall a symlink app:" "symlink failure should explain the problem"
+  assert_not_contains "$linked_output" "Checking for running processes" "symlink app should stop before process handling"
+  [ -L "$APPLICATIONS_DIR/Linked.app" ] || fail "symlink app was removed"
+  [ -e "$TEST_ROOT/Linked Source.app/Contents/Info.plist" ] || fail "linked app was removed"
+done
+
 expected_discovery=$(printf "%s\n" \
   "$APPLICATIONS_DIR/Linked.app" \
   "$APPLICATIONS_DIR/Raycast.app" \
