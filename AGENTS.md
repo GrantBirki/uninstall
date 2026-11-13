@@ -29,6 +29,9 @@ These are absolute constraints and must never be violated:
   - Kills remaining app processes that are inside the app bundle.
   - Unloads matching LaunchAgents/LaunchDaemons (verified by plist contents).
   - Moves matched paths to Trash via Finder (not hard delete).
+  - Moves the app bundle last and retains it when an app-data move fails, allowing the same command to be retried.
+- `--bundle-id <id>` supports cleanup after the app is gone. Require an exact, validated ID; do not infer app names, related helper IDs, or processes in this mode.
+- Keep Finder errors visible on stderr and return failure when any path cannot be moved.
 - Prints a summary report and a final "Done" on success.
 
 ## Application Discovery and Resolution
@@ -108,6 +111,7 @@ Output:
 ## Flags
 
 - `--list`: List installed applications. It cannot be combined with a target, `--yes`, `--dry-run`, or `--verbose`.
+- `--bundle-id <id>`: Clean up exact bundle ID paths without an app bundle; incompatible with a target or `--list`.
 - `--dry-run`: Show matches and summary without removing anything (default).
 - `--yes`: Skip confirmation prompts and proceed.
 - `--verbose`: Show full running process command lines.
@@ -140,7 +144,7 @@ File: `Formula/uninstall.rb`
 Steps:
 
 1. Open the Actions logs for the release workflow and find the "Homebrew tap update details" snippet (job: `release_info`).
-2. Record the release's authoritative `published_at` timestamp and wait for the tap's required 14 complete days.
+2. Record the release's authoritative `published_at` timestamp and follow the tap's current `SECURITY.md` policy. Its owner-controlled `uninstall` release exemption permits immediate adoption with complete provenance.
 3. Update the formula with:
    - `version`
    - `url` (must be under the release tag)
