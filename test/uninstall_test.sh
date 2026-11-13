@@ -173,6 +173,25 @@ assert_list_conflict "--yes" --yes
 assert_list_conflict "--dry-run" --dry-run
 assert_list_conflict "--verbose" --verbose
 assert_list_conflict "an application argument" "$APPLICATIONS_DIR/Raycast.app"
+assert_list_conflict "--bundle-id" --bundle-id com.example.App
+
+for invalid_id in '' 'com.example.*' '../App' 'com..App' 'com.example/App' 'com.example.App;echo' 'App' '--yes'; do
+  set +e
+  invalid_id_output=$(main --bundle-id "$invalid_id" 2>&1)
+  status=$?
+  set -e
+  assert_equal "1" "$status" "unsafe bundle IDs should fail"
+  assert_not_contains "$invalid_id_output" "Finding app data" "invalid IDs should stop before discovery"
+done
+
+for args in '--bundle-id' '--bundle-id com.example.App --bundle-id com.example.Other' '--bundle-id com.example.App Target.app'; do
+  set +e
+  argument_output=$(IFS=' '; main $args 2>&1)
+  status=$?
+  set -e
+  assert_equal "1" "$status" "invalid bundle ID arguments should fail"
+  assert_not_contains "$argument_output" "Finding app data" "invalid arguments should stop before discovery"
+done
 
 set +e
 missing_target_output=$(main --yes 2>&1)
@@ -189,6 +208,11 @@ assert_equal "1" "$status" "an invalid explicit path should fail"
 assert_contains "$invalid_path_output" "Cannot find app plist" "invalid paths should not fall back to name matching"
 
 if [ -x /usr/libexec/PlistBuddy ] && [ -x /usr/bin/plutil ]; then
+  # Fixture runs never contact Finder, inspect real processes, or request sudo.
+  sleep() { :; }
+  pgrep() { return 1; }
+  sudo() { fail "unexpected sudo in fixture cleanup"; }
+
   DIRECT_APP="$TEST_ROOT/Direct Fixture.app"
   mkdir -p "$DIRECT_APP/Contents"
   /usr/bin/plutil -create xml1 "$DIRECT_APP/Contents/Info.plist"
@@ -203,11 +227,18 @@ if [ -x /usr/libexec/PlistBuddy ] && [ -x /usr/bin/plutil ]; then
   [ -e "$DIRECT_APP/Contents/Info.plist" ] || fail "declining removed the fixture app"
 
   mkdir -p "$HOME/Library/Caches/com.example.uninstall-fixture"
-  move_path_to_trash() {
-    case "$1" in
-      "$HOME/Library/Caches/com.example.uninstall-fixture") return 1 ;;
-      *) return 0 ;;
-    esac
+  mkdir -p "$HOME/Library/Application Scripts/com.example.uninstall-fixture"
+  mkdir -p "$TEST_ROOT/Trash"
+  touch "$TEST_ROOT/fail-cache"
+  /usr/bin/osascript() {
+    local target arg
+    for arg in "$@"; do target="$arg"; done
+    printf '%s\n' "$target" >> "$TEST_ROOT/trash-calls"
+    if [ "$target" = "$HOME/Library/Caches/com.example.uninstall-fixture" ] && [ -e "$TEST_ROOT/fail-cache" ]; then
+      printf 'Finder: permission denied (-5000)\n' >&2
+      return 1
+    fi
+    mv "$target" "$TEST_ROOT/Trash/$(wc -l < "$TEST_ROOT/trash-calls" | tr -d ' ')"
   }
 
   set +e
@@ -215,8 +246,60 @@ if [ -x /usr/libexec/PlistBuddy ] && [ -x /usr/bin/plutil ]; then
   status=$?
   set -e
   assert_equal "1" "$status" "a partial Trash move should fail the command"
+  assert_contains "$partial_output" "Finder: permission denied (-5000)" "Finder errors should remain visible"
   assert_contains "$partial_output" "Move to Trash failed: $HOME/Library/Caches/com.example.uninstall-fixture" "partial failure should identify only the failed path"
-  assert_contains "$partial_output" "Trash action: partial (moved: 1, failed: 1)" "partial failure should report accurate counts"
+  assert_contains "$partial_output" "Trash action: partial (moved: 1, failed: 1)" "failure should not count the kept app as moved"
+  assert_contains "$partial_output" "App bundle kept so cleanup can be retried" "failure should explain recovery"
+  [ -e "$DIRECT_APP/Contents/Info.plist" ] || fail "cleanup failure removed the app needed for retry"
+  assert_not_contains "$(cat "$TEST_ROOT/trash-calls")" "$DIRECT_APP" "the app must not be trashed after a data failure"
+
+  rm "$TEST_ROOT/fail-cache"
+  retry_output=$(main --yes "$DIRECT_APP" 2>&1)
+  assert_contains "$retry_output" "Trash action: moved (moved: 2, failed: 0)" "retry should finish cleanup"
+  [ ! -e "$DIRECT_APP" ] || fail "successful retry left the app behind"
+  assert_equal "$DIRECT_APP" "$(tail -n 1 "$TEST_ROOT/trash-calls")" "the app bundle must move last"
+
+  mkdir -p "$HOME/Library/Containers/com.example.uninstall-fixture"
+  mkdir -p "$HOME/Library/Caches/com.example.uninstall-fixture.Other"
+  mkdir -p "$HOME/Library/Application Support/Direct Fixture"
+  mkdir -p "$HOME/Library/LaunchAgents"
+  unrelated_launch="$HOME/Library/LaunchAgents/com.example.unrelated.plist"
+  /usr/bin/plutil -create xml1 "$unrelated_launch"
+  /usr/bin/plutil -insert Label -string com.example.unrelated "$unrelated_launch"
+  prefix_launch="$HOME/Library/LaunchAgents/com.example.uninstall-fixture.Other.plist"
+  /usr/bin/plutil -create xml1 "$prefix_launch"
+  /usr/bin/plutil -insert Label -string com.example.uninstall-fixture.Other "$prefix_launch"
+  app_path=""
+  related_bundle_ids=(com.example.uninstall-fixture)
+  if launchd_matches_plist "$prefix_launch"; then
+    fail "a longer launch-item bundle ID must not match the cleanup ID"
+  fi
+  exact_launch="$TEST_ROOT/exact-launch.plist"
+  /usr/bin/plutil -create xml1 "$exact_launch"
+  /usr/bin/plutil -insert Label -string com.example.uninstall-fixture "$exact_launch"
+  launchd_matches_plist "$exact_launch" || fail "an exact launch-item bundle ID should match"
+
+  cleanup_preview=$(main --dry-run --bundle-id com.example.uninstall-fixture 2>&1)
+  assert_contains "$cleanup_preview" "Confirmation: dry-run" "bundle ID cleanup must support dry runs"
+  assert_contains "$cleanup_preview" "Total matched: 1" "bundle ID cleanup should match only the exact leftover"
+  assert_contains "$cleanup_preview" "No launch items found" "an absent app path must not match unrelated launch items"
+  assert_not_contains "$cleanup_preview" "com.example.uninstall-fixture.Other" "cleanup must not match an ID prefix"
+  [ -d "$HOME/Library/Containers/com.example.uninstall-fixture" ] || fail "dry run removed leftover data"
+
+  cleanup_decline=$(printf 'n\n' | main --bundle-id com.example.uninstall-fixture 2>&1)
+  assert_contains "$cleanup_decline" "Uninstall cancelled by user" "bundle ID cleanup should ask once"
+  [ -d "$HOME/Library/Containers/com.example.uninstall-fixture" ] || fail "declining removed leftover data"
+
+  cleanup_output=$(printf 'y\n' | main --bundle-id com.example.uninstall-fixture 2>&1)
+  assert_contains "$cleanup_output" "Trash action: moved (moved: 1, failed: 0)" "cleanup should work after the app is gone"
+  [ ! -e "$HOME/Library/Containers/com.example.uninstall-fixture" ] || fail "confirmed cleanup left matched data"
+  [ -d "$HOME/Library/Caches/com.example.uninstall-fixture.Other" ] || fail "cleanup removed another app's data"
+  [ -d "$HOME/Library/Application Support/Direct Fixture" ] || fail "bundle ID cleanup guessed an app name"
+  [ -e "$unrelated_launch" ] || fail "cleanup removed an unrelated launch item"
+  [ -e "$prefix_launch" ] || fail "cleanup removed a longer bundle ID's launch item"
+
+  empty_cleanup=$(main --yes --bundle-id com.example.uninstall-fixture 2>&1)
+  assert_contains "$empty_cleanup" "Trash action: skipped (no matches)" "completed cleanup should be safe to repeat"
 fi
 
 printf "All uninstall tests passed.\n"

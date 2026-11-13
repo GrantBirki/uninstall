@@ -68,11 +68,13 @@ After a target resolves uniquely, the normal preflight runs. By default, the com
 uninstall --dry-run raycast
 uninstall --verbose raycast
 uninstall --yes /Applications/Raycast.app
+uninstall --bundle-id com.example.App
 ```
 
 Flags:
 
 - `--list`: List installed applications. It cannot be combined with an application or uninstall flags.
+- `--bundle-id <id>`: Clean up exact bundle ID matches when the app bundle is already gone. It cannot be combined with an app target or `--list`.
 - `--dry-run`: Show matches and summary without removing anything (default).
 - `--yes`: Skip confirmation prompts and proceed.
 - `--verbose`: Show full running-process command lines.
@@ -81,6 +83,23 @@ Behavior:
 
 - Prompts once before changes; after confirmation it attempts to quit/kill app processes and unload matching launch items.
 - Uses bundle ID and app-name matches shown in the preflight report for cleanup.
+- Moves the app bundle last and keeps it in place if any data cannot be moved, so the same command can be retried.
+- Shows Finder's error when a move to Trash fails and returns a nonzero exit status.
+
+## Retrying cleanup
+
+If cleanup fails, resolve the reported Finder error and rerun the same command. The app bundle stays available until its data has moved successfully.
+
+If the app was already removed, use its exact bundle ID:
+
+```bash
+uninstall --dry-run --bundle-id com.example.App
+uninstall --bundle-id com.example.App
+```
+
+This mode keeps the normal preflight and single confirmation. It searches the existing bundle ID locations and matching launch items, without guessing an app name, discovering helper IDs, or stopping processes. If a helper has a separate bundle ID, review and clean it up separately.
+
+Run `uninstall` as your normal user. The CLI requests sudo for privileged process or launch-item operations when needed. Finder Automation and macOS privacy permissions are separate from administrator access; running the whole command with sudo does not grant those permissions. Check the reported error and the relevant Privacy & Security setting before retrying. See [Apple's file-access guidance](https://support.apple.com/guide/security/controlling-app-access-to-files-secddd1d86a6/web).
 
 ## Release 📦
 

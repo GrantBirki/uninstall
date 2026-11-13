@@ -119,13 +119,13 @@ launchd_matches_plist() {
   plist="$1"
   content=$(/usr/bin/plutil -p "$plist" 2> /dev/null) || return 1
 
-  if printf "%s" "$content" | grep -F "$app_path" > /dev/null; then
+  if [ -n "$app_path" ] && printf "%s" "$content" | grep -F "$app_path" > /dev/null; then
     return 0
   fi
 
   for id in "${related_bundle_ids[@]}"; do
     escaped=$(escape_regex "$id")
-    if printf "%s" "$content" | grep -Eq "(^|[^A-Za-z0-9])${escaped}([^A-Za-z0-9]|$)"; then
+    if printf "%s" "$content" | grep -Eq "(^|[^A-Za-z0-9_.-])${escaped}([^A-Za-z0-9_.-]|$)"; then
       return 0
     fi
   done
@@ -135,13 +135,16 @@ launchd_matches_plist() {
 
 move_path_to_trash() {
   # Finder aliases can resolve a symlink to an unrelated app or data directory.
-  [ ! -L "$1" ] || return 1
+  if [ -L "$1" ]; then
+    printf 'Refusing to trash a symlink: %s\n' "$1" >&2
+    return 1
+  fi
   /usr/bin/osascript \
     -e 'on run argv' \
     -e 'set targetItem to POSIX file (item 1 of argv)' \
     -e 'tell application "Finder" to delete targetItem' \
     -e 'end run' \
-    "$1" > /dev/null 2>&1
+    "$1" > /dev/null
 }
 
 print_usage() {
@@ -150,7 +153,9 @@ print_usage() {
   print_info "  uninstall --list"
   print_info "  uninstall [--dry-run] [--yes] [--verbose] /path/to/app.app"
   print_info "  uninstall [--dry-run] [--yes] [--verbose] app-name"
+  print_info "  uninstall [--dry-run] [--yes] --bundle-id com.example.App"
   print_info "  --list      List installed applications."
+  print_info "  --bundle-id Clean up exact bundle ID matches without an app bundle."
   print_info "  --dry-run   Show matches and summary without removing anything (default)."
   print_info "  --yes       Skip confirmation prompts and proceed."
   print_info "  --verbose   Show full running-process command lines."
@@ -182,6 +187,7 @@ function main() {
   seen_dry_run=false
   seen_yes=false
   app_path=""
+  bundle_identifier=""
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -191,6 +197,18 @@ function main() {
         ;;
       --list)
         list_requested=true
+        ;;
+      --bundle-id)
+        if [ $# -lt 2 ] || [ -n "$bundle_identifier" ]; then
+          print_error "Provide exactly one bundle ID after --bundle-id."
+          return 1
+        fi
+        bundle_identifier="$2"
+        if [[ ! "$bundle_identifier" =~ ^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$ ]]; then
+          print_error "Invalid bundle ID. Use an exact ID such as com.example.App."
+          return 1
+        fi
+        shift
         ;;
       --yes|-y)
         seen_yes=true
@@ -245,7 +263,7 @@ function main() {
   fi
 
   if [ "$list_requested" = true ]; then
-    if [ -n "$app_path" ] || [ "$seen_yes" = true ] || [ "$seen_dry_run" = true ] || [ "$verbose" = true ]; then
+    if [ -n "$app_path" ] || [ -n "$bundle_identifier" ] || [ "$seen_yes" = true ] || [ "$seen_dry_run" = true ] || [ "$verbose" = true ]; then
       print_error "Cannot combine --list with an app or uninstall options."
       return 1
     fi
@@ -254,53 +272,61 @@ function main() {
     return 0
   fi
 
-  if [ -z "$app_path" ]; then
-    print_error "Missing app path."
-    print_usage
-    return 1
+  if [ -n "$bundle_identifier" ]; then
+    if [ -n "$app_path" ]; then
+      print_error "Cannot combine --bundle-id with an app target."
+      return 1
+    fi
+    app_name="$bundle_identifier"
+  else
+    if [ -z "$app_path" ]; then
+      print_error "Missing app path."
+      print_usage
+      return 1
+    fi
+
+    app_path="${app_path%/}"
+    if [ -z "$app_path" ]; then
+      print_error "Invalid app path."
+      return 1
+    fi
+
+    case "$app_path" in
+      */*)
+        if [ ! -e "$app_path/Contents/Info.plist" ]; then
+          print_error "Cannot find app plist."
+          return 1
+        fi
+        ;;
+      *)
+        resolve_application "$app_path" "${APPLICATION_ROOTS[@]}"
+        resolution_status=$?
+        if [ "$resolution_status" -eq 0 ]; then
+          print_info "Resolved \"$app_path\" to \"$RESOLVED_APP_PATH\"."
+          app_path="$RESOLVED_APP_PATH"
+        elif [ "$resolution_status" -eq 2 ]; then
+          print_error "Multiple applications matched \"$app_path\":"
+          for match in "${RESOLUTION_MATCHES[@]}"; do
+            printf "%s\n" "$match"
+          done
+          print_info "Run uninstall again with one full application path."
+          return 1
+        else
+          print_error "No installed application matched \"$app_path\"."
+          print_info "Run uninstall --list to see available applications."
+          return 1
+        fi
+        ;;
+    esac
+
+    if [ -L "$app_path" ]; then
+      print_error "Cannot uninstall a symlink app: $app_path"
+      print_info "Run uninstall again with the full path to the actual app bundle."
+      return 1
+    fi
+
+    app_name=$(basename "$app_path" .app)
   fi
-
-  app_path="${app_path%/}"
-  if [ -z "$app_path" ]; then
-    print_error "Invalid app path."
-    return 1
-  fi
-
-  case "$app_path" in
-    */*)
-      if [ ! -e "$app_path/Contents/Info.plist" ]; then
-        print_error "Cannot find app plist."
-        return 1
-      fi
-      ;;
-    *)
-      resolve_application "$app_path" "${APPLICATION_ROOTS[@]}"
-      resolution_status=$?
-      if [ "$resolution_status" -eq 0 ]; then
-        print_info "Resolved \"$app_path\" to \"$RESOLVED_APP_PATH\"."
-        app_path="$RESOLVED_APP_PATH"
-      elif [ "$resolution_status" -eq 2 ]; then
-        print_error "Multiple applications matched \"$app_path\":"
-        for match in "${RESOLUTION_MATCHES[@]}"; do
-          printf "%s\n" "$match"
-        done
-        print_info "Run uninstall again with one full application path."
-        return 1
-      else
-        print_error "No installed application matched \"$app_path\"."
-        print_info "Run uninstall --list to see available applications."
-        return 1
-      fi
-      ;;
-  esac
-
-  if [ -L "$app_path" ]; then
-    print_error "Cannot uninstall a symlink app: $app_path"
-    print_info "Run uninstall again with the full path to the actual app bundle."
-    return 1
-  fi
-
-  app_name=$(basename "$app_path" .app)
   success=true
   processes_found=0
   processes_killed=0
@@ -318,46 +344,54 @@ function main() {
   launch_items_failed=0
   launch_action="skipped"
 
-  if [ ! -e "$app_path/Contents/Info.plist" ]; then
-    print_error "Cannot find app plist."
-    return 1
-  fi
-
-  bundle_identifier=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$app_path/Contents/Info.plist" 2> /dev/null)
-
-  if [ "$bundle_identifier" = "" ]; then
-    print_error "Cannot find app bundle identifier."
-    return 1
-  fi
-
-  related_bundle_ids=("$bundle_identifier")
-  while IFS= read -r -d '' plist; do
-    nested_id=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$plist" 2> /dev/null)
-    if [ -n "$nested_id" ]; then
-      case "$nested_id" in
-        "$bundle_identifier"*) related_bundle_ids+=("$nested_id") ;;
-      esac
+  if [ -n "$app_path" ]; then
+    if [ ! -e "$app_path/Contents/Info.plist" ]; then
+      print_error "Cannot find app plist."
+      return 1
     fi
-  done < <(find "$app_path" \( -path "*.app/Contents/Info.plist" -o -path "*.xpc/Contents/Info.plist" -o -path "*.appex/Contents/Info.plist" \) -print0)
+
+    bundle_identifier=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$app_path/Contents/Info.plist" 2> /dev/null)
+
+    if [ "$bundle_identifier" = "" ]; then
+      print_error "Cannot find app bundle identifier."
+      return 1
+    fi
+
+    related_bundle_ids=("$bundle_identifier")
+    while IFS= read -r -d '' plist; do
+      nested_id=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$plist" 2> /dev/null)
+      if [ -n "$nested_id" ]; then
+        case "$nested_id" in
+          "$bundle_identifier"*) related_bundle_ids+=("$nested_id") ;;
+        esac
+      fi
+    done < <(find "$app_path" \( -path "*.app/Contents/Info.plist" -o -path "*.xpc/Contents/Info.plist" -o -path "*.appex/Contents/Info.plist" \) -print0)
+  else
+    related_bundle_ids=("$bundle_identifier")
+  fi
   related_bundle_ids=($(printf "%s\n" "${related_bundle_ids[@]}" | sort -u))
 
   print_info "Checking for running processes…"
   sleep 1
 
-  raw_processes=($(pgrep -afil "$app_name" | grep -v "uninstall"))
   processes=()
-  for process in "${raw_processes[@]}"; do
-    pid=${process%% *}
-    cmdline=${process#* }
-    case "$cmdline" in
-      "$app_path"/Contents/*) processes+=("$process") ;;
-    esac
-  done
+  if [ -n "$app_path" ]; then
+    raw_processes=($(pgrep -afil "$app_name" | grep -v "uninstall"))
+    for process in "${raw_processes[@]}"; do
+      pid=${process%% *}
+      cmdline=${process#* }
+      case "$cmdline" in
+        "$app_path"/Contents/*) processes+=("$process") ;;
+      esac
+    done
+  fi
   processes_found=${#processes[@]}
 
   receipt_paths=()
 
-  receipt_paths+=($(find /private/var/db/receipts -iname "*$app_name*.bom" -maxdepth 1 -prune 2>&1 | grep -v "Permission denied"))
+  if [ -n "$app_path" ]; then
+    receipt_paths+=($(find /private/var/db/receipts -iname "*$app_name*.bom" -maxdepth 1 -prune 2>&1 | grep -v "Permission denied"))
+  fi
   receipt_paths+=($(find /private/var/db/receipts -iname "*$bundle_identifier*.bom" -maxdepth 1 -prune 2>&1 | grep -v "Permission denied"))
 
   receipt_logs_matched=${#receipt_paths[@]}
@@ -406,16 +440,18 @@ function main() {
     fi
   done
 
-  add_name_path "$HOME/Library/Application Support/$app_name"
-  add_name_path "$HOME/Library/Application Support/CrashReporter/$app_name"
-  add_name_path "$HOME/Library/Caches/$app_name"
-  add_name_path "$HOME/Library/Logs/$app_name"
-  add_name_path "$HOME/Library/Saved Application State/$app_name.savedState"
+  if [ -n "$app_path" ]; then
+    add_name_path "$HOME/Library/Application Support/$app_name"
+    add_name_path "$HOME/Library/Application Support/CrashReporter/$app_name"
+    add_name_path "$HOME/Library/Caches/$app_name"
+    add_name_path "$HOME/Library/Logs/$app_name"
+    add_name_path "$HOME/Library/Saved Application State/$app_name.savedState"
 
-  add_name_path "/Library/Application Support/$app_name"
-  add_name_path "/Library/Application Support/CrashReporter/$app_name"
-  add_name_path "/Library/Caches/$app_name"
-  add_name_path "/Library/Logs/$app_name"
+    add_name_path "/Library/Application Support/$app_name"
+    add_name_path "/Library/Application Support/CrashReporter/$app_name"
+    add_name_path "/Library/Caches/$app_name"
+    add_name_path "/Library/Logs/$app_name"
+  fi
 
   for dir in "$HOME/Library/LaunchAgents" "/Library/LaunchAgents" "/Library/LaunchDaemons"; do
     [ -d "$dir" ] || continue
@@ -431,15 +467,17 @@ function main() {
   name_paths=($(printf "%s\n" "${name_paths[@]}" | sort -u))
   launch_paths=($(printf "%s\n" "${launch_paths[@]}" | sort -u))
 
-  paths=("$app_path" "${bundle_paths[@]}" "${name_paths[@]}" "${launch_paths[@]}")
-  paths=($(printf "%s\n" "${paths[@]}" | sort -u));
+  paths=("${bundle_paths[@]}" "${name_paths[@]}" "${launch_paths[@]}")
+  paths=($(printf "%s\n" "${paths[@]}" | sort -u))
+  # Keep the bundle available for another run if any app data fails to move.
+  [ -z "$app_path" ] || paths+=("$app_path")
   paths_matched=${#paths[@]}
   launch_items_matched=${#launch_paths[@]}
 
   print_header "Preflight summary"
   print_info "App: $app_name"
   print_info "Bundle ID: $bundle_identifier"
-  print_info "App path: $app_path"
+  print_info "App path: ${app_path:-none (bundle ID cleanup)}"
   if [ "$seen_dry_run" = true ]; then
     print_info "Mode: dry run"
   elif [ "$auto_yes" = true ]; then
@@ -486,8 +524,10 @@ function main() {
   fi
 
   print_header "Matched paths"
-  print_info "App bundle:"
-  printf "%s\n" "$app_path"
+  if [ -n "$app_path" ]; then
+    print_info "App bundle (moved last):"
+    printf "%s\n" "$app_path"
+  fi
 
   print_info "Bundle ID matches: ${#bundle_paths[@]}"
   if [ ${#bundle_paths[@]} -gt 0 ]; then
@@ -654,6 +694,10 @@ function main() {
       print_info "Moving app data to trash…"
       sleep 1
       for path in "${paths[@]}"; do
+        if [ "$path" = "$app_path" ] && [ "$trash_failed" -gt 0 ]; then
+          print_warn "App bundle kept so cleanup can be retried: $app_path"
+          continue
+        fi
         if move_path_to_trash "$path"; then
           trash_count=$((trash_count + 1))
         else
