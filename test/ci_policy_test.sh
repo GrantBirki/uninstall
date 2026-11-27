@@ -13,7 +13,7 @@ fail() {
 }
 
 validate_workflow_steps() {
-  awk -v expected_fence="openai/fence@7cba9082252803421a0e433f29198de6d0063221" '
+  awk -v expected_fence="openai/fence@7703f3be10ee3d0a84e1839233e19fa00bb254a8" '
     function trim(value) {
       sub(/^[[:space:]]+/, "", value)
       sub(/[[:space:]]+$/, "", value)
@@ -51,7 +51,7 @@ validate_workflow_steps() {
           step_name = value
         } else if (key == "uses") {
           step_uses = value
-          if (raw ~ /#[[:space:]]*pin@v0\.13\.1[[:space:]]*$/) {
+          if (raw ~ /#[[:space:]]*pin@v0\.13\.2[[:space:]]*$/) {
             fence_pin_comment = "true"
           }
         } else if (key == "with" && value == "") {
@@ -293,7 +293,7 @@ quoted_fence_fixture=$(
     '    runs-on: ubuntu-24.04' \
     '    steps:' \
     '      - name: fence' \
-    "        'uses': openai/fence@7cba9082252803421a0e433f29198de6d0063221 # pin@v0.13.1"
+    "        'uses': openai/fence@7703f3be10ee3d0a84e1839233e19fa00bb254a8 # pin@v0.13.2"
 )
 validate_workflow_steps <(printf '%s\n' "$quoted_fence_fixture") >/dev/null 2>&1 || fail "quoted Fence action regression fixture failed"
 
@@ -304,7 +304,7 @@ audit_fence_fixture=$(
     '    runs-on: ubuntu-24.04' \
     '    steps:' \
     '      - name: fence' \
-    '        uses: openai/fence@7cba9082252803421a0e433f29198de6d0063221 # pin@v0.13.1' \
+    '        uses: openai/fence@7703f3be10ee3d0a84e1839233e19fa00bb254a8 # pin@v0.13.2' \
     '        with:' \
     '          mode: audit'
 )
@@ -318,7 +318,7 @@ spoofed_fence_fixture=$(
     '  test:' \
     '    runs-on: ubuntu-24.04' \
     '    steps:' \
-    "      - 'uses': openai/fence@7cba9082252803421a0e433f29198de6d0063221 # pin@v0.13.1" \
+    "      - 'uses': openai/fence@7703f3be10ee3d0a84e1839233e19fa00bb254a8 # pin@v0.13.2" \
     '        name: restrict network' \
     '      - name: fence' \
     '        run: echo spoof'
@@ -364,31 +364,31 @@ release_fence_policy=$(
 expected_release_fence_policy=$(
   cat <<'POLICY'
 [build]
-uses: openai/fence@7cba9082252803421a0e433f29198de6d0063221 # pin@v0.13.1
+uses: openai/fence@7703f3be10ee3d0a84e1839233e19fa00bb254a8 # pin@v0.13.2
 with:
   allow_github_artifacts: true
 [attest]
-uses: openai/fence@7cba9082252803421a0e433f29198de6d0063221 # pin@v0.13.1
+uses: openai/fence@7703f3be10ee3d0a84e1839233e19fa00bb254a8 # pin@v0.13.2
 with:
   allow_github_artifacts: true
   allowlist: |
     fulcio.sigstore.dev
     rekor.sigstore.dev
 [verify]
-uses: openai/fence@7cba9082252803421a0e433f29198de6d0063221 # pin@v0.13.1
+uses: openai/fence@7703f3be10ee3d0a84e1839233e19fa00bb254a8 # pin@v0.13.2
 with:
   allow_github_artifacts: true
   allowlist: |
     tuf-repo-cdn.sigstore.dev
     tuf-repo.github.com
 [release]
-uses: openai/fence@7cba9082252803421a0e433f29198de6d0063221 # pin@v0.13.1
+uses: openai/fence@7703f3be10ee3d0a84e1839233e19fa00bb254a8 # pin@v0.13.2
 with:
   allow_github_artifacts: true
   allowlist: |
     uploads.github.com
 [release_info]
-uses: openai/fence@7cba9082252803421a0e433f29198de6d0063221 # pin@v0.13.1
+uses: openai/fence@7703f3be10ee3d0a84e1839233e19fa00bb254a8 # pin@v0.13.2
 with:
   allow_github_artifacts: true
 POLICY
